@@ -1,0 +1,1 @@
+[35mapi/ping.ts[m[36m:[m[32m2[m[36m:[mexport const config = { runtime: '[1;31mnodejs18.x[m' }
