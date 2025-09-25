@@ -14,17 +14,7 @@ import Top10 from './pages_Top10'
 import Fixtures from './pages_Fixtures'
 import Stats from './pages_Stats'
 
-type Route =
-  | 'landing'
-  | 'contest'
-  | 'create'
-  | 'leaderboard'
-  | 'rewards'
-  | 'home'
-  | 'viewteam'
-  | 'top10'
-  | 'fixtures'
-  | 'stats'
+type Route = 'landing' | 'contest' | 'create' | 'leaderboard' | 'rewards' | 'home' | 'viewteam' | 'top10' | 'fixtures' | 'stats'
 
 function App() {
   const [route, setRoute] = useState<Route>('landing')
@@ -77,14 +67,11 @@ function App() {
     stack.push(next)
     setRoute(next)
   }
-
   const back = () => {
     const stack = stackRef.current
     if (stack.length > 1) {
       stack.pop()
       setRoute(stack[stack.length - 1])
-    } else {
-      setRoute('home')
     }
   }
 
@@ -92,39 +79,40 @@ function App() {
     <>
       {route === 'landing'     && <Landing onLaunch={() => go('contest')} />}
 
-      {route === 'contest'     && <JoinContest onSelect={() => go('create')} />}
+      {route === 'contest'     && (
+        <JoinContest
+          onSelect={() => go('create')}
+          onBack={back}                 // ✅ add onBack
+        />
+      )}
 
-      {route === 'create'      && <CreateTeam onNext={() => go('leaderboard')} />}
+      {route === 'create'      && (
+        <CreateTeam
+          onNext={() => go('leaderboard')}
+          onBack={back}                 // ✅ add onBack
+        />
+      )}
 
       {route === 'leaderboard' && <Leaderboard onNext={() => go('rewards')} />}
 
       {route === 'rewards'     && <Rewards onClaim={() => go('home')} />}
 
-      {route === 'home' && (
+      {route === 'home'        && (
         <HomeHub
           onViewTeam={() => go('viewteam')}
+          onCreateTeam={() => go('create')}
+          onJoinContest={() => go('contest')}
+          onLeaderboard={() => go('leaderboard')}
           onTop10={() => go('top10')}
-          onLeaderboard={() => go('top10')}
           onFixtures={() => go('fixtures')}
           onStats={() => go('stats')}
         />
       )}
 
-      {route === 'viewteam' && (
-        <ViewTeam onBack={back} onCreateTeam={() => go('create')} />
-      )}
-
-      {route === 'top10' && (
-        <Top10 onBack={back} />
-      )}
-
-      {route === 'fixtures' && (
-        <Fixtures onBack={back} />
-      )}
-
-      {route === 'stats' && (
-        <Stats onBack={back} />
-      )}
+      {route === 'viewteam'    && <ViewTeam onBack={back} />}
+      {route === 'top10'       && <Top10 onBack={back} />}
+      {route === 'fixtures'    && <Fixtures onBack={back} />}
+      {route === 'stats'       && <Stats onBack={back} />}
     </>
   )
 }

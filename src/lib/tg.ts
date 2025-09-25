@@ -1,22 +1,12 @@
-import WebApp from '@twa-dev/sdk';
-export const tg = WebApp;
-
-export function initTelegram() {
-  tg.ready();
-  tg.expand();
-  tg.disableVerticalSwipes?.();
+// src/lib/tg.ts
+export function getWebApp() {
+  return (window as any)?.Telegram?.WebApp
 }
 
-export function setMainButton(text: string, onClick: () => void) {
-  tg.MainButton.setParams({ text, is_visible: true });
-  tg.MainButton.onClick(onClick);
+export function getInitData(): string {
+  try { return getWebApp()?.initData || '' } catch { return '' }
 }
 
-export function clearMainButton() {
-  tg.MainButton.hide();
-  tg.MainButton.offClick(() => {}); // clears all listeners
-}
-
-export function userFromInitData() {
-  return tg.initDataUnsafe?.user;
+export function supports(min: string): boolean {
+  try { return getWebApp()?.isVersionAtLeast?.(min) === true } catch { return false }
 }
