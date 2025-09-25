@@ -30,7 +30,6 @@ function App() {
   const [route, setRoute] = useState<Route>('landing')
   const stackRef = useRef<Route[]>(['landing'])
 
-  // Telegram helpers
   const getTG = () => (window as any)?.Telegram?.WebApp
   const supports = (min: string) => {
     try { return getTG()?.isVersionAtLeast?.(min) === true } catch { return false }
@@ -63,8 +62,7 @@ function App() {
       const stack = stackRef.current
       if (stack.length > 1) {
         stack.pop()
-        const prev = stack[stack.length - 1]
-        setRoute(prev)
+        setRoute(stack[stack.length - 1])
       }
     }
     try {
@@ -93,18 +91,23 @@ function App() {
       {route === 'contest'     && (
         <JoinContest
           onSelect={() => go('create')}
-          onBack={back}                 // ✅ required
+          onBack={back}
         />
       )}
 
       {route === 'create'      && (
         <CreateTeam
           onNext={() => go('leaderboard')}
-          onBack={back}                 // ✅ required
+          onBack={back}
         />
       )}
 
-      {route === 'leaderboard' && <Leaderboard onNext={() => go('rewards')} />}
+      {route === 'leaderboard' && (
+        <Leaderboard
+          onNext={() => go('rewards')}
+          onBack={back}              {/* ✅ add onBack */}
+        />
+      )}
 
       {route === 'rewards'     && <Rewards onClaim={() => go('home')} />}
 
