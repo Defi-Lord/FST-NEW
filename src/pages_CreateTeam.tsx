@@ -1,291 +1,338 @@
 // src/pages_CreateTeam.tsx
 import { useEffect, useMemo, useState } from 'react'
-import { useApp, type Player, type Position } from './state'
 import TopBar from './components_TopBar'
+import { useApp } from './state'
 import { fetchBootstrap } from './api'
 
-// Debug sentinel so you can confirm this exact file is running
-export const __CREATE_TEAM_FILE_ID__ = 'CreateTeam.V2.Flow-Leaderboard-Rewards-Home';
-if (typeof window !== 'undefined') {
-  console.log('SENTINEL:', __CREATE_TEAM_FILE_ID__);
+type Props = {
+  onNext?: () => void
+  onBack: () => void
 }
 
-/** Squad rules */
-const START_BUDGET = 100.0            // shown via context, but kept here for progress calc
-const LIMITS: Record<Position, number> = { GK: 2, DEF: 5, MID: 5, FWD: 3 }
-const TOTAL_SQUAD = 15
-const CLUB_CAP = 3
-
-/** Helpers */
-const formatMoney = (n: number) => `£${n.toFixed(1)}m`
-const countBy = <K extends string>(arr: Record<K, any>[], key: K) =>
-  arr.reduce<Record<string, number>>((acc, it) => {
-    const k = String(it[key]); acc[k] = (acc[k] ?? 0) + 1; return acc
-  }, {})
-
+/** ==== Types from FPL bootstrap ==== */
 type FplElement = {
   id: number
   web_name: string
+  first_name?: string
+  second_name?: string
   team: number
-  now_cost: number        // tenths of a million (e.g. 96 -> £9.6m)
-  element_type: number    // 1 GK, 2 DEF, 3 MID, 4 FWD
-  form: string
+  element_type: 1 | 2 | 3 | 4
+  now_cost: number // tenths of a million
 }
-type FplTeam = { id: number; name: string }
-const mapTypeToPosition = (t: number): Position =>
-  (['', 'GK','DEF','MID','FWD'] as const)[t] as Position
+type FplTeam = { id: number; name: string; short_name: string }
 
-export default function CreateTeam({
-  onNext,
-  onBack,
-}: {
-  onNext: () => void
-  onBack?: () => void
-}) {
-  const { team, addPlayer, removePlayer, budget } = useApp() // budget here is the remaining £
+type PlayerLite = {
+  id: number
+  name: string
+  club: string
+  short: string
+  type: 'GK' | 'DEF' | 'MID' | 'FWD'
+  price: number // millions
+}
+
+const POS_LABEL: Record<number, 'GK'|'DEF'|'MID'|'FWD'> = {
+  1: 'GK', 2: 'DEF', 3: 'MID', 4: 'FWD'
+}
+
+/** Format helpers */
+const money = (n: number) => `£${n.toFixed(1)}m`
+const initials = (name: string) =>
+  name.split(/\s+/).filter(Boolean).slice(0,2).map(s => s[0]?.toUpperCase() ?? '').join('')
+
+/** Kit art (same vibe as ViewTeam) */
+function hashHue(key: string) { let h = 0; for (let i=0;i<key.length;i++) h = (h*31 + key.charCodeAt(i))>>>0; return h%360 }
+function kitColors(short: string) {
+  const hue = hashHue(short || 'TEAM')
+  return { primary: `hsl(${hue}, 70%, 45%)`, secondary: `hsl(${(hue+40)%360}, 65%, 55%)`, accent: '#ffffff' }
+}
+function Jersey({ code }: { code: string }) {
+  const { primary, secondary, accent } = kitColors(code || 'TEAM')
+  const pid = `stripes-${code}`
+  return (
+    <svg width="52" height="50" viewBox="0 0 52 50" aria-hidden>
+      <path d="M8,10 L16,4 L26,10 L36,4 L44,10 L41,44 Q26,50 11,44 Z"
+            fill={primary} stroke="rgba(255,255,255,0.25)" strokeWidth="1" />
+      <defs>
+        <pattern id={pid} patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="skewX(-20)">
+          <rect width="6" height="6" fill="transparent" />
+          <rect width="3" height="6" fill={secondary} opacity="0.22" />
+        </pattern>
+      </defs>
+      <path d="M8,10 L16,4 L26,10 L36,4 L44,10 L41,44 Q26,50 11,44 Z" fill={`url(#${pid})`} />
+      <circle cx="26" cy="12" r="5.5" fill={accent} opacity="0.9" />
+      <text x="26" y="30" textAnchor="middle" fontFamily="system-ui, sans-serif" fontWeight="900" fontSize="11" fill={accent}>
+        {code || 'FC'}
+      </text>
+    </svg>
+  )
+}
+
+export default function CreateTeam({ onNext, onBack }: Props) {
+  const app = useApp()
+  const { team, budget } = app
+  const addPlayer = (app as any).addPlayer as ((p: any) => void) | undefined
+  const removePlayer = (app as any).removePlayer as ((id: number) => void) | undefined
+
+  const picked = team.length
+  const maxSquad = 15
+
+  /** Load FPL bootstrap → build player pool */
+  const [pool, setPool] = useState<PlayerLite[]>([])
   const [loading, setLoading] = useState(true)
-  const [err, setErr] = useState<string | null>(null)
-  const [all, setAll] = useState<Player[]>([])
-  const [q, setQ] = useState('')
-  const [pos, setPos] = useState<'ALL' | Position>('ALL')
 
-  // Load live FPL player pool (proxied) with fallback to local JSON
   useEffect(() => {
-    let mounted = true
+    let alive = true
     ;(async () => {
       try {
-        setLoading(true); setErr(null)
+        setLoading(true)
         const data = await fetchBootstrap()
-        const teams: FplTeam[] = data?.teams || []
-        const elements: FplElement[] = data?.elements || []
-        const teamNameById = new Map(teams.map(t => [t.id, t.name]))
-        const mapped: Player[] = elements.map(e => ({
-          id: String(e.id),
-          name: e.web_name,
-          club: teamNameById.get(e.team) || `Team ${e.team}`,
-          position: mapTypeToPosition(e.element_type),
-          price: Number((e.now_cost || 0) / 10),
-          form: Number(parseFloat(e.form || '0')),
-        }))
-        if (!mounted) return
-        setAll(mapped)
-      } catch (e) {
-        if (!mounted) return
-        console.warn('FPL bootstrap failed; falling back to local JSON.', e)
-        setErr('Couldn’t load real FPL players. Showing fallback list — check your /api proxy/rewrite.')
-        try {
-          const r = await fetch('/fallback-players.json', { cache: 'no-store' })
-          const arr = await r.json()
-          const mapped: Player[] = (arr as any[]).map(p => ({
-            id: String(p.id),
-            name: p.name,
-            club: p.club,
-            position: p.position as Position,
-            price: Number(p.price),
-            form: Number(p.form ?? 0),
-          }))
-          setAll(mapped)
-        } catch {
-          setAll([])
-        }
+        const teams: FplTeam[] = data?.teams ?? []
+        const elements: FplElement[] = data?.elements ?? []
+
+        const byTeam = new Map<number, FplTeam>()
+        teams.forEach(t => byTeam.set(t.id, t))
+
+        const mapped: PlayerLite[] = elements.slice(0, 600).map((e) => {
+          const t = byTeam.get(e.team)
+          const name = e.web_name || [e.first_name, e.second_name].filter(Boolean).join(' ')
+          return {
+            id: e.id,
+            name: name || 'Player',
+            club: t?.name || '—',
+            short: (t?.short_name || 'TEAM').toUpperCase(),
+            type: POS_LABEL[e.element_type],
+            price: (e.now_cost ?? 45) / 10, // convert to millions
+          }
+        })
+        if (!alive) return
+        setPool(mapped)
+      } catch {
+        if (!alive) return
+        setPool([])
       } finally {
-        if (mounted) setLoading(false)
+        if (alive) setLoading(false)
       }
     })()
-    return () => { mounted = false }
+    return () => { alive = false }
   }, [])
 
-  /** Derived trackers (selected = global context `team`) */
-  const posCount = useMemo(() => {
-    const c: Record<Position, number> = { GK: 0, DEF: 0, MID: 0, FWD: 0 }
-    team.forEach((p: Player) => { c[p.position]++ })
-    return c
-  }, [team])
-  const clubCount = useMemo(() => countBy(team, 'club'), [team])
+  /** Filters */
+  const [q, setQ] = useState('')
+  const [pos, setPos] = useState<'ALL'|'GK'|'DEF'|'MID'|'FWD'>('ALL')
+  const [sortBy, setSortBy] = useState<'name'|'price'>('name')
 
   const filtered = useMemo(() => {
-    const term = q.trim().toLowerCase()
-    return all
-      .filter(p => pos === 'ALL' || p.position === pos)
-      .filter(p =>
-        term === '' ||
-        p.name.toLowerCase().includes(term) ||
-        p.club.toLowerCase().includes(term) ||
-        p.position.toLowerCase().includes(term))
-      .sort((a, b) => b.price - a.price)
-  }, [all, q, pos])
+    let list = pool
+    if (pos !== 'ALL') list = list.filter(p => p.type === pos)
+    if (q.trim()) {
+      const s = q.trim().toLowerCase()
+      list = list.filter(p =>
+        p.name.toLowerCase().includes(s) ||
+        p.club.toLowerCase().includes(s) ||
+        p.short.toLowerCase().includes(s)
+      )
+    }
+    list = [...list].sort((a, b) => {
+      if (sortBy === 'price') return b.price - a.price
+      return a.name.localeCompare(b.name)
+    })
+    return list
+  }, [pool, pos, q, sortBy])
 
-  /** Validate before adding */
-  function canAdd(p: Player): { ok: boolean; reason?: string } {
-    if (team.find(s => String(s.id) === String(p.id))) return { ok: false, reason: 'Already in squad' }
-    if (team.length >= TOTAL_SQUAD) return { ok: false, reason: 'Squad is full' }
-    if (budget - p.price < 0) return { ok: false, reason: 'Insufficient budget' }
-    if (posCount[p.position] >= LIMITS[p.position]) return { ok: false, reason: `Max ${LIMITS[p.position]} ${p.position}` }
-    if ((clubCount[p.club] ?? 0) >= CLUB_CAP) return { ok: false, reason: `Max ${CLUB_CAP} from ${p.club}` }
-    return { ok: true }
-  }
+  /** Budget & progress */
+  const spent = useMemo(() => {
+    return team.reduce((acc: number, p: any) => acc + (Number(p.price) || 0), 0)
+  }, [team])
+  const remaining = Math.max(0, budget - spent)
+  const progressPct = Math.min(100, Math.round((picked / maxSquad) * 100))
 
   /** Actions */
-  const add = (p: Player) => {
-    const v = canAdd(p)
-    if (!v.ok) return alert(v.reason)
-    addPlayer(p) // writes to global context + adjusts remaining budget
+  const inTeam = (id: number) => team.some((p: any) => Number(p.id) === Number(id))
+  const canAdd = (p: PlayerLite) =>
+    picked < maxSquad && remaining >= p.price && !inTeam(p.id)
+
+  const onAdd = (p: PlayerLite) => {
+    if (!addPlayer) return
+    if (!canAdd(p)) return
+    addPlayer({
+      id: p.id,
+      name: p.name,
+      club: p.club,
+      price: p.price,
+      position: p.type,
+      element_type: { GK:1, DEF:2, MID:3, FWD:4 }[p.type]
+    })
   }
-  const remove = (p: Player) => removePlayer(p.id)
+  const onRemove = (id: number) => {
+    if (!removePlayer) return
+    removePlayer(id)
+  }
 
-  const complete =
-    team.length === TOTAL_SQUAD &&
-    (['GK', 'DEF', 'MID', 'FWD'] as Position[]).every(k => posCount[k] === LIMITS[k]) &&
-    budget >= 0
-
-  /** Budget progress bar uses starting budget (100) vs used */
-  const used = START_BUDGET - budget
-  const usedPct = Math.min(100, Math.max(0, (used / START_BUDGET) * 100))
+  /** Player card */
+  const Card = ({ p }: { p: PlayerLite }) => {
+    const selected = inTeam(p.id)
+    const can = canAdd(p)
+    return (
+      <div
+        className="card"
+        style={{
+          padding: 12,
+          borderRadius: 16,
+          display: 'flex',
+          gap: 10,
+          alignItems: 'center',
+          minWidth: 0
+        }}
+      >
+        <div style={{ width: 52, flexShrink:0, display:'grid', placeItems:'center' }}>
+          <Jersey code={p.short} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {/* Name: white */}
+          <div style={{ fontWeight: 900, color: '#fff', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+            {p.name}
+          </div>
+          <div className="subtle" style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+            <span className="chip" style={{ padding:'2px 8px', borderRadius:10 }}>{p.type}</span>
+            <span>{p.club}</span>
+          </div>
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontWeight: 900 }}>{money(p.price)}</div>
+          {selected ? (
+            <button
+              className="btn-remove"
+              onClick={() => onRemove(p.id)}
+              style={{ marginTop: 6 }}
+            >
+              Remove
+            </button>
+          ) : (
+            <button
+              className="btn-add"
+              onClick={() => onAdd(p)}
+              style={{ marginTop: 6, opacity: can ? 1 : 0.5, pointerEvents: can ? 'auto' : 'none' }}
+            >
+              Add
+            </button>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="screen">
-      <div className="bg bg-field" />
-      <div className="scrim" />
+      <div className="container" style={{ paddingBottom: 110, overflowX: 'hidden' }}>
+        <TopBar
+          title="Create Team"
+          onBack={onBack}
+          rightSlot={
+            <div className="balance-chip">
+              {money(remaining)} <span className="subtle" style={{ marginLeft:6 }}>/ {money(budget)}</span>
+            </div>
+          }
+        />
 
-      <div className="container">
-        {/* Top bar with Back + balance */}
-        <div className="topbar">
-          <div className="topbar-left">
-            {onBack && <button className="btn-back" onClick={onBack}>←</button>}
-            <div className="topbar-title">Create Team</div>
+        {/* Squad status */}
+        <div className="card" style={{ marginBottom: 12 }}>
+          <div className="row" style={{ alignItems:'flex-start', gap:10, flexWrap:'wrap' }}>
+            <div>
+              <div style={{ fontWeight:900, fontSize:18 }}>Your Squad</div>
+              <div className="subtle">{picked}/{maxSquad} players selected</div>
+              <div className="progress" style={{ marginTop: 10 }}>
+                <span style={{ width: `${progressPct}%` }} />
+              </div>
+            </div>
+            <div className="view-team" style={{ gap:10, flex: '0 0 auto' }}>
+              <div className="subtle">Remaining</div>
+              <div style={{ fontWeight:900 }}>{money(remaining)}</div>
+            </div>
           </div>
-          <div className="topbar-right">
-            <span className="balance-chip">{formatMoney(budget)} left</span>
-          </div>
+
+          {/* Mini list of current players */}
+          {picked > 0 && (
+            <div className="mini-team">
+              {team.slice(0, 8).map((p: any) => (
+                <div key={p.id} className="mini-pill">
+                  <span className="mini-dot" /> {p.name}
+                </div>
+              ))}
+              {picked > 8 && <div className="mini-more">+{picked - 8} more</div>}
+            </div>
+          )}
         </div>
 
-        {/* Budget progress */}
-        <div className="progress">
-          <span style={{ width: `${usedPct}%` }} />
-        </div>
+        {/* Filters */}
+        <div className="card" style={{ marginBottom: 12 }}>
+          <div className="form-row">
+            <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
+              <select className="select" value={pos} onChange={e => setPos(e.target.value as any)}>
+                <option value="ALL">All</option>
+                <option value="GK">GK</option>
+                <option value="DEF">DEF</option>
+                <option value="MID">MID</option>
+                <option value="FWD">FWD</option>
+              </select>
 
-        {/* Filters + counters */}
-        <div className="form-row">
-          <select className="select" value={pos} onChange={e => setPos(e.target.value as any)}>
-            <option value="ALL">All</option>
-            <option value="GK">GK</option>
-            <option value="DEF">DEF</option>
-            <option value="MID">MID</option>
-            <option value="FWD">FWD</option>
-          </select>
-
-          <div style={{ flex: 1 }} />
-
-          <div className="chip">GK {posCount.GK}/{LIMITS.GK}</div>
-          <div className="chip">DEF {posCount.DEF}/{LIMITS.DEF}</div>
-          <div className="chip">MID {posCount.MID}/{LIMITS.MID}</div>
-          <div className="chip">FWD {posCount.FWD}/{LIMITS.FWD}</div>
-          <div className="chip">Total {team.length}/{TOTAL_SQUAD}</div>
-        </div>
-
-        {/* Search */}
-        <div className="search-row">
-          <input
-            className="input"
-            placeholder="Search player, club, or position…"
-            value={q}
-            onChange={e => setQ(e.target.value)}
-          />
-        </div>
-
-        {/* Loading / Error */}
-        {loading && <div className="card">Loading players…</div>}
-        {err && <div className="card" style={{ borderColor: 'crimson' }}>{err}</div>}
-
-        {/* Table header + rows */}
-        {!loading && !err && (
-          <div className="list">
-            <div className="card" style={{ fontWeight: 700 }}>
-              <div style={{ flex: 1 }}>Player</div>
-              <div style={{ width: 64, textAlign: 'center' }}>Pos</div>
-              <div style={{ width: 100, textAlign: 'center' }}>Club</div>
-              <div style={{ width: 160, textAlign: 'right' }}>Price</div>
+              <select className="select" value={sortBy} onChange={e => setSortBy(e.target.value as any)}>
+                <option value="name">Sort: Name</option>
+                <option value="price">Sort: Price</option>
+              </select>
             </div>
 
-            {filtered.map(p => {
-              const already = team.some(s => String(s.id) === String(p.id))
-              const verdict = canAdd(p)
-              const disabled = already || !verdict.ok
-              const hint = already ? 'Already selected' : verdict.reason
-
-              return (
-                <div key={`${p.id}`} className={`card row ${already ? 'pill-you' : ''}`}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 14, flex: 1 }}>
-                    <div className="avatar" />
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                      <strong>{p.name}</strong>
-                      <span className="subtle">{p.club} • {p.position}</span>
-                    </div>
-                  </div>
-
-                  <div style={{ width: 64, textAlign: 'center' }}>{p.position}</div>
-                  <div style={{ width: 100, textAlign: 'center' }}>{p.club}</div>
-
-                  <div style={{ width: 160, display: 'flex', justifyContent: 'flex-end', gap: 10, alignItems: 'center' }}>
-                    <span className="price">{formatMoney(p.price)}</span>
-                    <button
-                      className={already ? 'btn-remove' : 'btn-add'}
-                      onClick={() => already ? remove(p) : add(p)}
-                      disabled={disabled}
-                      title={hint}
-                    >
-                      {already ? 'Remove' : 'Add'}
-                    </button>
-                  </div>
-                </div>
-              )
-            })}
-
-            {filtered.length === 0 && <div className="card">No players match your filters.</div>}
-          </div>
-        )}
-
-        {/* Selected squad summary */}
-        <div className="card" style={{ marginTop: 12 }}>
-          <h3 style={{ marginTop: 0 }}>Your Squad ({team.length}/{TOTAL_SQUAD})</h3>
-          <ul style={{ listStyle: 'none', padding: 0, display: 'grid', gap: 6 }}>
-            {team.map(p => (
-              <li key={`s-${p.id}`} className="row" style={{ gap: 8 }}>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <div className="avatar" />
-                  <div>
-                    <div style={{ fontWeight: 600 }}>{p.name}</div>
-                    <small className="subtle">{p.club} • {p.position}</small>
-                  </div>
-                </div>
-                <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <span>{formatMoney(p.price)}</span>
-                  <button className="btn-remove" onClick={() => remove(p)}>Remove</button>
-                </div>
-              </li>
-            ))}
-          </ul>
-
-          <div className="row" style={{ marginTop: 8 }}>
-            <strong>Remaining:</strong>
-            <strong>{formatMoney(budget)}</strong>
+            <div className="search-row" style={{ flex: 1, minWidth: 180 }}>
+              <input
+                className="input"
+                placeholder="Search players or clubs…"
+                value={q}
+                onChange={e => setQ(e.target.value)}
+              />
+            </div>
           </div>
         </div>
 
-        {/* Confirm */}
-        <div className="bottom-actions">
+        {/* Players grid — fully responsive */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+          gap: 10,
+        }}>
+          {loading && Array.from({ length: 8 }).map((_, i) => (
+            <div key={`s-${i}`} className="card" style={{ height: 96, opacity:.5 }} />
+          ))}
+          {!loading && filtered.slice(0, 200).map(p => (
+            <Card key={p.id} p={p} />
+          ))}
+        </div>
+      </div>
+
+      {/* Bottom actions */}
+      <nav className="bottom-actions">
+        <div className="row" style={{ gap:10 }}>
+          <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+            <div className="avatar" style={{ display:'grid', placeItems:'center', background:'rgba(255,255,255,0.12)' }}>
+              <span style={{ fontWeight:900 }}>{initials('Your Squad')}</span>
+            </div>
+            <div>
+              <div className="subtle">Progress</div>
+              <div style={{ fontWeight:900 }}>{picked}/{maxSquad}</div>
+            </div>
+          </div>
           <button
             className="cta"
-            onClick={() => complete ? onNext() : alert('Select 15 players within budget and position limits.')}
-            disabled={!complete}
-            style={{ opacity: complete ? 1 : 0.6, width: '100%' }}
+            onClick={onNext}
+            disabled={picked < maxSquad}
+            style={{
+              opacity: picked < maxSquad ? 0.6 : 1,
+              pointerEvents: picked < maxSquad ? 'none' : 'auto',
+              marginLeft: 'auto'
+            }}
           >
-            {complete ? 'Continue' : 'Select 15 players'}
+            Enter Leaderboard
           </button>
         </div>
-
-        <div className="safe-bottom" />
-      </div>
+      </nav>
     </div>
   )
 }
