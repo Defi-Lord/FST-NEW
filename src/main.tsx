@@ -30,6 +30,7 @@ function App() {
   const [route, setRoute] = useState<Route>('landing')
   const stackRef = useRef<Route[]>(['landing'])
 
+  // Telegram helpers
   const getTG = () => (window as any)?.Telegram?.WebApp
   const supports = (min: string) => {
     try { return getTG()?.isVersionAtLeast?.(min) === true } catch { return false }
@@ -86,16 +87,16 @@ function App() {
 
   return (
     <>
-      {route === 'landing'     && <Landing onLaunch={() => go('contest')} />}
+      {route === 'landing' && <Landing onLaunch={() => go('contest')} />}
 
-      {route === 'contest'     && (
+      {route === 'contest' && (
         <JoinContest
           onSelect={() => go('create')}
           onBack={back}
         />
       )}
 
-      {route === 'create'      && (
+      {route === 'create' && (
         <CreateTeam
           onNext={() => go('leaderboard')}
           onBack={back}
@@ -105,11 +106,11 @@ function App() {
       {route === 'leaderboard' && (
         <Leaderboard
           onNext={() => go('rewards')}
-          onBack={back}              {/* ✅ add onBack */}
+          onBack={back}
         />
       )}
 
-      {route === 'rewards'     && <Rewards onClaim={() => go('home')} />}
+      {route === 'rewards' && <Rewards onClaim={() => go('home')} />}
 
       {route === 'home' && (
         <HomeHub
@@ -125,9 +126,9 @@ function App() {
       )}
 
       {route === 'viewteam' && <ViewTeam onBack={back} />}
-      {route === 'top10'    && <Top10 onBack={back} />}
+      {route === 'top10' && <Top10 onBack={back} />}
       {route === 'fixtures' && <Fixtures onBack={back} />}
-      {route === 'stats'    && <Stats onBack={back} />}
+      {route === 'stats' && <Stats onBack={back} />}
     </>
   )
 }
