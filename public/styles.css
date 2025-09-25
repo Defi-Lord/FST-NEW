@@ -324,5 +324,26 @@ body{
 .qa-blue{  background: linear-gradient(160deg, rgba(120,180,255,.22), rgba(255,255,255,.06)) }
 .qa-purple{background: linear-gradient(160deg, rgba(190,120,255,.22), rgba(255,255,255,.06)) }
 .qa-orange{background: linear-gradient(160deg, rgba(255,180,120,.22), rgba(255,255,255,.06)) }
+/* === Mobile overflow guards === */
+html, body, #root {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+.screen, .container {
+  max-width: 100vw;
+  overflow-x: hidden;
+  box-sizing: border-box;
+}
+
+.card, .hero, .qa-grid, .list {
+  box-sizing: border-box;
+}
+
+/* Make benches/lists scroll only inside themselves, not the whole page */
+.h-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
 
 /* existing ghost + mini team styles you already have are fine */
