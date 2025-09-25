@@ -14,12 +14,23 @@ import Top10 from './pages_Top10'
 import Fixtures from './pages_Fixtures'
 import Stats from './pages_Stats'
 
-type Route = 'landing' | 'contest' | 'create' | 'leaderboard' | 'rewards' | 'home' | 'viewteam' | 'top10' | 'fixtures' | 'stats'
+type Route =
+  | 'landing'
+  | 'contest'
+  | 'create'
+  | 'leaderboard'
+  | 'rewards'
+  | 'home'
+  | 'viewteam'
+  | 'top10'
+  | 'fixtures'
+  | 'stats'
 
 function App() {
   const [route, setRoute] = useState<Route>('landing')
   const stackRef = useRef<Route[]>(['landing'])
 
+  // Telegram helpers
   const getTG = () => (window as any)?.Telegram?.WebApp
   const supports = (min: string) => {
     try { return getTG()?.isVersionAtLeast?.(min) === true } catch { return false }
@@ -82,14 +93,14 @@ function App() {
       {route === 'contest'     && (
         <JoinContest
           onSelect={() => go('create')}
-          onBack={back}                 // ✅ add onBack
+          onBack={back}                 // ✅ required
         />
       )}
 
       {route === 'create'      && (
         <CreateTeam
           onNext={() => go('leaderboard')}
-          onBack={back}                 // ✅ add onBack
+          onBack={back}                 // ✅ required
         />
       )}
 
@@ -97,22 +108,23 @@ function App() {
 
       {route === 'rewards'     && <Rewards onClaim={() => go('home')} />}
 
-      {route === 'home'        && (
+      {route === 'home' && (
         <HomeHub
           onViewTeam={() => go('viewteam')}
           onCreateTeam={() => go('create')}
           onJoinContest={() => go('contest')}
           onLeaderboard={() => go('leaderboard')}
           onTop10={() => go('top10')}
+          onTransfers={() => alert('Transfers coming soon')}
           onFixtures={() => go('fixtures')}
           onStats={() => go('stats')}
         />
       )}
 
-      {route === 'viewteam'    && <ViewTeam onBack={back} />}
-      {route === 'top10'       && <Top10 onBack={back} />}
-      {route === 'fixtures'    && <Fixtures onBack={back} />}
-      {route === 'stats'       && <Stats onBack={back} />}
+      {route === 'viewteam' && <ViewTeam onBack={back} />}
+      {route === 'top10'    && <Top10 onBack={back} />}
+      {route === 'fixtures' && <Fixtures onBack={back} />}
+      {route === 'stats'    && <Stats onBack={back} />}
     </>
   )
 }
