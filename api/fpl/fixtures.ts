@@ -1,7 +1,7 @@
 // api/fpl/fixtures.ts
 export default async function handler(req: any, res: any) {
   try {
-    const url = new URL(req.url || 'http://localhost')
+    const url = new URL(req.url || '', 'http://localhost') // ✅ base is required on Vercel
     const future = url.searchParams.get('future')
     const qs = future ? '?future=1' : ''
     const r = await fetch(`https://fantasy.premierleague.com/api/fixtures/${qs}`)

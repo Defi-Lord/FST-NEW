@@ -1,7 +1,7 @@
 // api/fpl/element-summary.ts
 export default async function handler(req: any, res: any) {
   try {
-    const url = new URL(req.url || 'http://localhost')
+    const url = new URL(req.url || '', 'http://localhost') // ✅ base
     const id = url.searchParams.get('id')
     if (!id) {
       res.status(400).json({ error: 'missing id' })

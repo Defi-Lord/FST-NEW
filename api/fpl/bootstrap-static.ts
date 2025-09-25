@@ -1,5 +1,5 @@
 // api/fpl/bootstrap-static.ts
-export default async function handler(req: any, res: any) {
+export default async function handler(_req: any, res: any) {
   try {
     const r = await fetch('https://fantasy.premierleague.com/api/bootstrap-static/')
     const data = await r.json()
