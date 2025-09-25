@@ -1,5 +1,7 @@
 {
-  "rewrites": [
-    { "source": "/api/fpl/(.*)", "destination": "https://fantasy.premierleague.com/api/$1" }
-  ]
+  "functions": {
+    "api/**/*.ts": {
+      "runtime": "nodejs"
+    }
+  }
 }
