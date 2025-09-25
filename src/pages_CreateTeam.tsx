@@ -35,7 +35,6 @@ const getName = (p: any) =>
 export default function CreateTeam({ onNext, onBack }: Props) {
   const { team, budget } = useApp()
 
-  // Optional: fetch bootstrap for meta (club names, etc.)
   const [boot, setBoot] = useState<any>(null)
   useEffect(() => { (async () => setBoot(await fetchBootstrap().catch(() => null)))() }, [])
   const teamById = useMemo(() => {
@@ -57,27 +56,21 @@ export default function CreateTeam({ onNext, onBack }: Props) {
   const Row = ({ title, items }: { title: string; items: any[] }) => (
     <div style={{ marginBottom: 14 }}>
       <div style={{ fontWeight: 900, margin: '4px 0 8px' }}>{title}</div>
-      {/* isolate horizontal scroll to the row only */}
-      <div className="h-scroll" style={{ display:'flex', gap:10, paddingBottom: 4 }}>
+      <div style={{ display:'flex', gap:10, paddingBottom: 4, overflowX:'auto', WebkitOverflowScrolling:'touch' }}>
         {items.map((p) => {
           const tmeta = teamById.get(Number(p.team))
           const club = tmeta?.name || p.club || '—'
-        return (
-          <div key={String(p.id ?? p.code ?? p.name)} className="card" style={{ minWidth: 220, padding: 10 }}>
-            <div style={{ fontWeight: 900, color:'#fff', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-              {getName(p)}
-            </div>
-            <div className="subtle" style={{ marginTop: 2 }}>{club}</div>
+          return (
+            <div key={String(p.id ?? p.code ?? p.name)} className="card" style={{ minWidth: 180, padding: 10 }}>
+              <div style={{ fontWeight: 900, color:'#fff', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                {getName(p)}
+              </div>
+              <div className="subtle" style={{ marginTop: 2 }}>{club}</div>
 
-            {/* put your ADD/REMOVE controls here; keep them as they were */}
-            {/* Example (non-functional placeholder):
-            <div style={{ marginTop: 8, display:'flex', gap:8 }}>
-              <button className="chip">Add</button>
-              <button className="btn-ghost">Remove</button>
+              {/* your existing add/remove controls go here */}
             </div>
-            */}
-          </div>
-        )})}
+          )
+        })}
       </div>
     </div>
   )
@@ -91,7 +84,6 @@ export default function CreateTeam({ onNext, onBack }: Props) {
           rightSlot={<div className="balance-chip">£{budget.toFixed(1)}m</div>}
         />
 
-        {/* PAGE HEADER / any filters you already have */}
         <div className="card" style={{
           border:'none', margin:'12px 12px 8px', padding:12,
           background:'linear-gradient(135deg, rgba(99,102,241,0.22), rgba(236,72,153,0.22))',
@@ -99,14 +91,12 @@ export default function CreateTeam({ onNext, onBack }: Props) {
         }}>
           <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
             <div style={{ fontWeight: 900, fontSize: 18, marginRight:'auto' }}>Pick Your Squad</div>
-            {/* You can place your search/filter chips here */}
           </div>
           <div className="subtle" style={{ marginTop:6 }}>
             Tip: scroll each row sideways to see more players.
           </div>
         </div>
 
-        {/* === YOUR EXISTING CONTENT CAN STAY; rows below are examples bound to current team === */}
         <div style={{ padding:'0 12px' }}>
           <Row title="Goalkeepers" items={grouped.GK} />
           <Row title="Defenders"   items={grouped.DEF} />
@@ -114,7 +104,6 @@ export default function CreateTeam({ onNext, onBack }: Props) {
           <Row title="Forwards"    items={grouped.FWD} />
         </div>
 
-        {/* CTA footer */}
         <div style={{
           position:'fixed', left:0, right:0, bottom:0,
           padding: 12, background:'rgba(0,0,0,0.65)', backdropFilter:'blur(6px)'

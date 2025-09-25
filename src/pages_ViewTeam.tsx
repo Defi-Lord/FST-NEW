@@ -253,18 +253,11 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
             <Jersey code={short} />
           </div>
           <div style={{ flex:1, minWidth:0 }}>
-            {/* NAME in white */}
-            <div
-              style={{
-                fontWeight: 900,
-                color: '#ffffff',
-                whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'
-              }}
-            >
+            {/* NAME (white, always visible) */}
+            <div style={{ fontWeight: 900, color:'#fff', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
               {displayName}
             </div>
-
-            {/* club appears only when selected */}
+            {/* club only when selected */}
             <div className="subtle" style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', minHeight:18 }}>
               {selected ? (
                 <>
@@ -276,13 +269,10 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
               )}
             </div>
           </div>
-
           <div style={{ textAlign:'right', minWidth:72 }}>
             <div style={{ fontWeight:900 }}>{form !== undefined ? form.toFixed(1) : '—'}</div>
             <div className="subtle">ICT {ict !== undefined ? ict.toFixed(1) : '—'}</div>
-            {Number.isFinite(Number(price)) && (
-              <div className="subtle">{money(Number(price))}</div>
-            )}
+            {Number.isFinite(Number(price)) && <div className="subtle">{money(Number(price))}</div>}
           </div>
         </div>
       </button>
@@ -290,19 +280,10 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
   }
 
   const Ghost = () => (
-    <div
-      className="card"
-      style={{
-        borderRadius: 14,
-        padding: 10,
-        width: '100%',
-        height: 86,
-        border: '1px dashed rgba(255,255,255,0.18)',
-        background: 'rgba(255,255,255,0.06)',
-        opacity: 0.6
-      }}
-      aria-hidden
-    />
+    <div className="card" style={{
+      borderRadius: 14, padding: 10, width: '100%', height: 86,
+      border: '1px dashed rgba(255,255,255,0.18)', background: 'rgba(255,255,255,0.06)', opacity: 0.6
+    }} aria-hidden/>
   )
 
   const FormationRow = ({ items }: { items: (any|null)[] }) => {
@@ -313,15 +294,12 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
           style={{
             width: '100%',
             display: 'grid',
-            gridTemplateColumns: `repeat(${cols}, minmax(140px, 1fr))`, // more compact on phones
+            gridTemplateColumns: `repeat(${cols}, minmax(140px, 1fr))`, // ← only tweak (from 200px)
             gap: 12,
             maxWidth: '100vw'
           }}
         >
-          {items.map((p, i) => p
-            ? <PlayerCard key={keyOf(p)} k={keyOf(p)} zone="XI" />
-            : <Ghost key={`ghost-${i}`} />
-          )}
+          {items.map((p, i) => p ? <PlayerCard key={keyOf(p)} k={keyOf(p)} zone="XI" /> : <Ghost key={`ghost-${i}`} />)}
         </div>
       </div>
     )
@@ -333,27 +311,13 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
         <TopBar
           title="Your Team"
           onBack={onBack}
-          rightSlot={
-            <div className="balance-chip"
-                 style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)'}}>
-              £{budget.toFixed(1)}m
-            </div>
-          }
+          rightSlot={<div className="balance-chip" style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)'}}>£{budget.toFixed(1)}m</div>}
         />
 
-        {/* Scrollable content */}
+        {/* scrollable */}
         <div style={{ overflowY: 'auto', paddingBottom: 18, maxWidth: '100vw', overflowX: 'hidden' }}>
-          <div
-            className="card"
-            style={{
-              border: 'none',
-              margin: 12,
-              padding: 14,
-              background:
-                'linear-gradient(135deg, rgba(99,102,241,0.22), rgba(236,72,153,0.22))',
-              backdropFilter: 'blur(4px)',
-            }}
-          >
+          <div className="card" style={{ border: 'none', margin: 12, padding: 14, background:
+            'linear-gradient(135deg, rgba(99,102,241,0.22), rgba(236,72,153,0.22))', backdropFilter: 'blur(4px)' }}>
             <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
               <div style={{ fontWeight: 900, fontSize: 18, marginRight: 'auto' }}>This Week’s XI</div>
               <div className="subtle">Formation</div>
@@ -379,11 +343,10 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
               <button className="btn-ghost" onClick={onCreateTeam}>Go to Create Team</button>
             </div>
             <div className="subtle" style={{ marginTop: 6 }}>
-              Tap a starter and a bench player (GK↔GK, outfield↔outfield) to substitute. Tip: tap again to deselect.
+              Tap a starter and a bench player (GK↔GK, outfield↔outfield) to substitute. Tap again to deselect.
             </div>
           </div>
 
-          {/* Formation layout */}
           <div style={{ display:'grid', gap: 14, padding: '0 12px', maxWidth: '100vw', overflowX: 'hidden' }}>
             <FormationRow items={rows.gk} />
             <FormationRow items={rows.def} />
@@ -391,19 +354,15 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
             <FormationRow items={rows.fwd} />
           </div>
 
-          {/* Bench */}
           <div style={{ padding: '12px' }}>
             <div style={{ fontWeight: 900, margin: '12px 0 6px' }}>Bench</div>
             <div className="card" style={{ border: '1px solid rgba(255,255,255,0.12)' }}>
-              {/* Own horizontal scroll, not the page */}
-              <div className="h-scroll" style={{ display:'flex', gap:10, padding: 8 }}>
-                {benchKeys
-                  .filter(k => byKey.get(k))
-                  .map(k => (
-                    <div key={k} style={{ flex:'0 0 260px' }}>
-                      <PlayerCard k={k} zone="BENCH" />
-                    </div>
-                  ))}
+              <div style={{ display:'flex', gap:10, padding: 8, overflowX:'auto', WebkitOverflowScrolling:'touch' }}>
+                {benchKeys.filter(k => byKey.get(k)).map(k => (
+                  <div key={k} style={{ flex:'0 0 260px' }}>
+                    <PlayerCard k={k} zone="BENCH" />
+                  </div>
+                ))}
               </div>
             </div>
           </div>
