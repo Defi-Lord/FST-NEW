@@ -32,28 +32,14 @@ type TeamMeta    = { id: number; name: string; short_name: string }
 const keyOf = (p: any) => String(p?.id ?? p?.code ?? p?.name ?? p?.web_name ?? p?.player_name ?? Math.random())
 
 const getName = (p: any) =>
-  String(
-    p?.name ??
-    p?.web_name ??
-    p?.fullName ??
-    p?.player_name ??
-    p?.short_name ??
-    'Player'
-  )
-
-const initials = (name: string) =>
-  name.split(/\s+/).filter(Boolean).slice(0,2).map(s => s[0]?.toUpperCase() ?? '').join('')
+  String(p?.name ?? p?.web_name ?? p?.fullName ?? p?.player_name ?? p?.short_name ?? 'Player')
 
 const money = (n?: number) => (n !== undefined && Number.isFinite(Number(n))) ? `£${Number(n).toFixed(1)}m` : ''
 
 function hashHue(key: string) { let h = 0; for (let i=0;i<key.length;i++) h = (h*31 + key.charCodeAt(i))>>>0; return h%360 }
 function kitColors(short: string) {
   const hue = hashHue(short || 'TEAM')
-  return {
-    primary:   `hsl(${hue}, 70%, 45%)`,
-    secondary: `hsl(${(hue+40)%360}, 65%, 55%)`,
-    accent:    '#ffffff'
-  }
+  return { primary: `hsl(${hue}, 70%, 45%)`, secondary: `hsl(${(hue+40)%360}, 65%, 55%)`, accent: '#ffffff' }
 }
 function Jersey({ code }: { code: string }) {
   const { primary, secondary, accent } = kitColors(code || 'TEAM')
@@ -180,7 +166,7 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
     return g === 'DEF' || g === 'MID' || g === 'FWD'
   }
 
-  function onCardClick(k: string, zone: 'XI'|'BENCH') {
+  function onCardClick(k: string, _zone: 'XI'|'BENCH') {
     if (!byKey.get(k)) return
     if (pending === null) { setPending(k); return }
     if (pending === k)   { setPending(null); return }
@@ -251,23 +237,16 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
         }}
         title={`${displayName} (${club})`}
       >
-        <div style={{ display:'flex', gap:10, alignItems:'center' }}>
-          <div style={{ width: 52, display:'grid', placeItems:'center' }}>
+        <div style={{ display:'flex', gap:10, alignItems:'center', minWidth: 0 }}>
+          <div style={{ width: 52, display:'grid', placeItems:'center', flexShrink:0 }}>
             <Jersey code={short} />
           </div>
           <div style={{ flex:1, minWidth:0 }}>
-            {/* NAME: now forced to white */}
-            <div
-              style={{
-                fontWeight: 900,
-                color: '#ffffff',            // ←–––––––––––––––––––––––––––– name in white
-                whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'
-              }}
-            >
+            {/* NAME in white */}
+            <div style={{ fontWeight: 900, color:'#fff', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
               {displayName}
             </div>
-
-            {/* SECOND LINE: show CLUB only when selected; otherwise just role chip */}
+            {/* Club only when selected */}
             <div className="subtle" style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', minHeight:18 }}>
               {selected ? (
                 <>
@@ -279,13 +258,10 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
               )}
             </div>
           </div>
-
           <div style={{ textAlign:'right', minWidth:72 }}>
             <div style={{ fontWeight:900 }}>{form !== undefined ? form.toFixed(1) : '—'}</div>
             <div className="subtle">ICT {ict !== undefined ? ict.toFixed(1) : '—'}</div>
-            {Number.isFinite(Number(price)) && (
-              <div className="subtle">{money(Number(price))}</div>
-            )}
+            {Number.isFinite(Number(price)) && <div className="subtle">{money(Number(price))}</div>}
           </div>
         </div>
       </button>
@@ -308,18 +284,19 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
     />
   )
 
+  /* ✅ Fully fluid row (no fixed min widths) */
   const FormationRow = ({ items }: { items: (any|null)[] }) => {
     const cols = Math.max(items.length, 1)
-    const maxWidth = Math.min(1000, cols * 240)
     return (
-      <div style={{ display:'grid', placeItems:'center' }}>
+      <div style={{ display:'grid', placeItems:'center', width:'100%' }}>
         <div
           style={{
-            width: '100%',
-            maxWidth,
-            display: 'grid',
-            gridTemplateColumns: `repeat(${cols}, minmax(200px, 1fr))`,
-            gap: 12,
+            width:'100%',
+            display:'grid',
+            gridTemplateColumns:`repeat(${cols}, 1fr)`,
+            gap:10,
+            alignItems:'stretch',
+            minWidth:0
           }}
         >
           {items.map((p, i) => p
@@ -332,30 +309,29 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
   }
 
   return (
-    <div className="screen" style={{ height: '100vh', overflow: 'hidden' }}>
-      <div className="container" style={{ padding: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <div className="screen" style={{ height:'100vh', overflow:'hidden', overflowX:'hidden' }}>
+      <div className="container" style={{ padding: 0, height:'100%', display:'flex', flexDirection:'column' }}>
         <TopBar
           title="Your Team"
           onBack={onBack}
           rightSlot={
             <div className="balance-chip"
-                 style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)'}}>
+                 style={{ background:'rgba(255,255,255,0.08)', border:'1px solid rgba(255,255,255,0.12)'}}>
               £{budget.toFixed(1)}m
             </div>
           }
         />
 
         {/* Scrollable content */}
-        <div style={{ overflowY: 'auto', paddingBottom: 18 }}>
+        <div style={{ overflowY:'auto', paddingBottom: 18 }}>
           <div
             className="card"
             style={{
-              border: 'none',
+              border:'none',
               margin: 12,
               padding: 14,
-              background:
-                'linear-gradient(135deg, rgba(99,102,241,0.22), rgba(236,72,153,0.22))',
-              backdropFilter: 'blur(4px)',
+              background:'linear-gradient(135deg, rgba(99,102,241,0.22), rgba(236,72,153,0.22))',
+              backdropFilter:'blur(4px)',
             }}
           >
             <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
@@ -368,12 +344,12 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
                     className={`chip ${formation === f ? 'chip--on' : ''}`}
                     onClick={() => setFormation(f)}
                     style={{
-                      padding: '6px 10px',
-                      borderRadius: 14,
+                      padding:'6px 10px',
+                      borderRadius:14,
                       background: formation === f
                         ? 'linear-gradient(135deg, rgba(168,85,247,0.6), rgba(59,130,246,0.6))'
                         : 'linear-gradient(135deg, rgba(255,255,255,0.10), rgba(255,255,255,0.06))',
-                      border: '1px solid rgba(255,255,255,0.18)'
+                      border:'1px solid rgba(255,255,255,0.18)'
                     }}
                   >
                     {f}
@@ -387,7 +363,7 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
             </div>
           </div>
 
-          {/* Formation layout (no pitch) */}
+          {/* Formation layout (rows) */}
           <div style={{ display:'grid', gap: 14, padding: '0 12px' }}>
             <FormationRow items={rows.gk} />
             <FormationRow items={rows.def} />
