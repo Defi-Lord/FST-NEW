@@ -200,11 +200,12 @@ export default function CreateTeam({
         {/* Table header + rows */}
         {!loading && !err && (
           <div className="list">
+            {/* Header uses responsive CSS vars for widths */}
             <div className="card" style={{ fontWeight: 700 }}>
               <div style={{ flex: 1 }}>Player</div>
-              <div style={{ width: 64, textAlign: 'center' }}>Pos</div>
-              <div style={{ width: 100, textAlign: 'center' }}>Club</div>
-              <div style={{ width: 160, textAlign: 'right' }}>Price</div>
+              <div style={{ width: 'var(--col-pos)', textAlign: 'center' }}>Pos</div>
+              <div style={{ width: 'var(--col-club)', textAlign: 'center' }}>Club</div>
+              <div style={{ width: 'var(--col-price)', textAlign: 'right' }}>Price</div>
             </div>
 
             {filtered.map(p => {
@@ -215,18 +216,20 @@ export default function CreateTeam({
 
               return (
                 <div key={`${p.id}`} className={`card row ${already ? 'pill-you' : ''}`}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 14, flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 14, flex: 1, minWidth: 0 }}>
                     <div className="avatar" />
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                      <strong>{p.name}</strong>
-                      <span className="subtle">{p.club} • {p.position}</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                      <strong style={{ whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{p.name}</strong>
+                      <span className="subtle" style={{ whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                        {p.club} • {p.position}
+                      </span>
                     </div>
                   </div>
 
-                  <div style={{ width: 64, textAlign: 'center' }}>{p.position}</div>
-                  <div style={{ width: 100, textAlign: 'center' }}>{p.club}</div>
+                  <div style={{ width: 'var(--col-pos)', textAlign: 'center' }}>{p.position}</div>
+                  <div style={{ width: 'var(--col-club)', textAlign: 'center', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{p.club}</div>
 
-                  <div style={{ width: 160, display: 'flex', justifyContent: 'flex-end', gap: 10, alignItems: 'center' }}>
+                  <div style={{ width: 'var(--col-price)', display: 'flex', justifyContent: 'flex-end', gap: 10, alignItems: 'center' }}>
                     <span className="price">{formatMoney(p.price)}</span>
                     <button
                       className={already ? 'btn-remove' : 'btn-add'}
@@ -251,10 +254,10 @@ export default function CreateTeam({
           <ul style={{ listStyle: 'none', padding: 0, display: 'grid', gap: 6 }}>
             {team.map(p => (
               <li key={`s-${p.id}`} className="row" style={{ gap: 8 }}>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0 }}>
                   <div className="avatar" />
-                  <div>
-                    <div style={{ fontWeight: 600 }}>{p.name}</div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{p.name}</div>
                     <small className="subtle">{p.club} • {p.position}</small>
                   </div>
                 </div>
