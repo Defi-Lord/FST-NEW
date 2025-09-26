@@ -7,7 +7,11 @@ import { fetchBootstrap } from './api'
 type Props = { onBack?: () => void; onCreateTeam?: () => void }
 
 type Group = 'GK' | 'DEF' | 'MID' | 'FWD'
-type Formation = '3-4-3' | '3-5-2' | '4-4-2' | '4-3-3' | '4-5-1' | '5-3-2' | '5-4-1'
+type Formation =
+  | '3-4-3' | '3-5-2'
+  | '4-4-2' | '4-3-3' | '4-5-1'
+  | '5-3-2' | '5-4-1'
+
 const FORMATIONS: Formation[] = ['3-4-3','3-5-2','4-4-2','4-3-3','4-5-1','5-3-2','5-4-1']
 const parseFormation = (f: Formation) => f.split('-').map(n => Number(n)) as [number, number, number]
 
@@ -32,9 +36,8 @@ type TeamMeta    = { id: number; name: string; short_name: string }
 const keyOf = (p: any) => String(p?.id ?? p?.code ?? p?.name ?? p?.web_name ?? p?.player_name ?? Math.random())
 const fullNameOf = (p: any) => String(p?.name ?? p?.web_name ?? p?.fullName ?? p?.player_name ?? p?.short_name ?? 'Player')
 const money = (n?: number) => (n !== undefined && Number.isFinite(Number(n))) ? `£${Number(n).toFixed(1)}m` : ''
-const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n))
 
-/** Smart short name: "Bukayo Saka" → "B. Saka" */
+/** Smart short name: "Erling Haaland" → "E. Haaland" (keeps tooltip with full name) */
 function shortName(full: string): string {
   const clean = String(full || '').trim().replace(/\s+/g, ' ')
   if (!clean) return full
@@ -46,6 +49,7 @@ function shortName(full: string): string {
   return `${initial} ${last}`
 }
 
+/* ---------- tiny jersey svg so card stays compact ---------- */
 function hashHue(key: string) { let h = 0; for (let i=0;i<key.length;i++) h = (h*31 + key.charCodeAt(i))>>>0; return h%360 }
 function kitColors(short: string) {
   const hue = hashHue(short || 'TEAM')
@@ -55,7 +59,7 @@ function Jersey({ code }: { code: string }) {
   const { primary, secondary, accent } = kitColors(code || 'TEAM')
   const pid = `stripes-${code}`
   return (
-    <svg width="46" height="44" viewBox="0 0 52 50" aria-hidden>
+    <svg width="40" height="38" viewBox="0 0 52 50" aria-hidden>
       <path d="M8,10 L16,4 L26,10 L36,4 L44,10 L41,44 Q26,50 11,44 Z"
             fill={primary} stroke="rgba(255,255,255,0.25)" strokeWidth="1" />
       <defs>
@@ -65,8 +69,7 @@ function Jersey({ code }: { code: string }) {
         </pattern>
       </defs>
       <path d="M8,10 L16,4 L26,10 L36,4 L44,10 L41,44 Q26,50 11,44 Z" fill={`url(#${pid})`} />
-      <circle cx="26" cy="12" r="5.5" fill={accent} opacity="0.9" />
-      <text x="26" y="30" textAnchor="middle" fontFamily="system-ui, sans-serif" fontWeight="900" fontSize="10" fill={accent}>
+      <text x="26" y="31" textAnchor="middle" fontFamily="system-ui, sans-serif" fontWeight="900" fontSize="10" fill={accent}>
         {code || 'FC'}
       </text>
     </svg>
@@ -76,25 +79,74 @@ function Jersey({ code }: { code: string }) {
 export default function ViewTeam({ onBack, onCreateTeam }: Props) {
   const { team, budget } = useApp()
 
-  // More aggressive compaction
+  /* -------- scoped styles: smaller card, all info inside, no overflow -------- */
   const Responsive = (
     <style>{`
-      [data-resp="view-team"] {
-        --fs-xs: clamp(9px, 2.3vw, 12px);
-        --fs-sm: clamp(10px, 2.5vw, 13px);
-        --fs-md: clamp(11px, 2.8vw, 14px);
-        --fs-lg: clamp(12px, 3.2vw, 16px);
-        --stat-min: clamp(56px, 17vw, 78px);
-        --tile-pad: clamp(8px, 2.2vw, 10px);
+      [data-resp="vt"] {
+        --fs-xxs: clamp(9px, 2.1vw, 11px);
+        --fs-xs:  clamp(10px, 2.3vw, 12px);
+        --fs-sm:  clamp(11px, 2.6vw, 13px);
+        --fs-md:  clamp(12px, 2.9vw, 14px);
+        --fs-lg:  clamp(13px, 3.2vw, 16px);
+        --pad:    clamp(8px, 2.2vw, 10px);
+        --gap:    clamp(6px, 2vw, 8px);
       }
-      [data-resp="view-team"] .container { max-width: 100%; overflow-x: hidden; }
-      [data-resp="view-team"] .subtle { font-size: var(--fs-sm); }
-      [data-resp="view-team"] .balance-chip { font-size: var(--fs-sm); }
-      [data-resp="view-team"] .card { font-size: var(--fs-md); padding: var(--tile-pad) !important; }
-      [data-resp="view-team"] .chip { font-size: var(--fs-xs); padding: 2px 6px; }
-      [data-resp="view-team"] .pitch, [data-resp="view-team"] .FormationRows { max-width: 100vw; overflow-x: hidden; }
-      @media (max-width: 480px) {
-        [data-resp="view-team"] .card { padding: var(--tile-pad) !important; }
+      [data-resp="vt"] .container { max-width: 100%; overflow-x: hidden; }
+      [data-resp="vt"] .card      { font-size: var(--fs-md); padding: var(--pad) !important; }
+      [data-resp="vt"] .subtle    { font-size: var(--fs-xs); }
+      [data-resp="vt"] .chip      { font-size: var(--fs-xxs); padding: 2px 6px; border-radius: 10px; }
+      [data-resp="vt"] .pc-grid   {
+        display: grid;
+        grid-template-columns: auto 1fr auto;  /* jersey | text | stats */
+        align-items: center;
+        gap: var(--gap);
+        min-width: 0;
+      }
+      /* text block stays inside card */
+      [data-resp="vt"] .pc-text {
+        min-width: 0;
+      }
+      [data-resp="vt"] .pc-name {
+        font-weight: 900;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-size: var(--fs-lg);
+        letter-spacing: .1px;
+        line-height: 1.05;
+      }
+      [data-resp="vt"] .pc-meta {
+        display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+        margin-top: 2px;
+      }
+      /* stats column is compact and won’t force overflow */
+      [data-resp="vt"] .pc-stats {
+        text-align: right;
+        min-width: 72px;      /* small, fixed-ish */
+      }
+      [data-resp="vt"] .pc-stats .val { font-weight: 900; }
+      [data-resp="vt"] .pc-stats .lbl { font-size: var(--fs-xxs); opacity: .85; }
+      @media (max-width: 430px) {
+        /* on tiny phones, stack stats under text to save width */
+        [data-resp="vt"] .pc-grid {
+          grid-template-columns: auto 1fr;      /* jersey | (text+stats) */
+        }
+        [data-resp="vt"] .pc-stats {
+          grid-column: 2 / 3;
+          text-align: left;
+          margin-top: 4px;
+          min-width: 0;
+        }
+      }
+      /* formation rows never overflow */
+      [data-resp="vt"] .FormationRows {
+        width: 100%;
+        max-width: 100vw;
+        display: grid;
+        grid-template-columns: repeat(var(--cols, 1), minmax(58px, 1fr));
+        gap: 10px;
+        align-items: stretch;
+        min-width: 0;
       }
     `}</style>
   )
@@ -139,11 +191,8 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
 
   const roster = useMemo(() => {
     const by: Record<Group, any[]> = { GK: [], DEF: [], MID: [], FWD: [] }
-    for (const p of team) {
-      const g = detectGroup(p) ?? 'MID'
-      by[g].push(p)
-    }
-    ;(Object.keys(by) as Group[]).forEach(k => by[k].sort((a,b) => String(fullNameOf(a)).localeCompare(String(fullNameOf(b)))))
+    for (const p of team) (by[detectGroup(p) ?? 'MID']).push(p)
+    ;(Object.keys(by) as Group[]).forEach(k => by[k].sort((a,b) => fullNameOf(a).localeCompare(fullNameOf(b))))
 
     const [needD, needM, needF] = parseFormation(formation)
     const xi: any[] = []
@@ -223,87 +272,79 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
     setXiKeys(newXi); setBenchKeys(newBench); setPending(null)
   }
 
-  const xiPlayers = useMemo(() => xiKeys.map(k => byKey.get(k)).filter(Boolean), [xiKeys, byKey])
-  const rows = useMemo(() => {
-    const { d, m, f } = roster.need
-    const groupOf = (p: any) => detectGroup(p) ?? 'MID'
-    const gk  = xiPlayers.filter((p: any) => groupOf(p) === 'GK').slice(0, 1)
-    const def = xiPlayers.filter((p: any) => groupOf(p) === 'DEF').slice(0, d)
-    const mid = xiPlayers.filter((p: any) => groupOf(p) === 'MID').slice(0, m)
-    const fwd = xiPlayers.filter((p: any) => groupOf(p) === 'FWD').slice(0, f)
-    const pad = (arr: any[], n: number) => { const out = [...arr]; while (out.length < n) out.push(null); return out }
-    return { gk: pad(gk, 1), def: pad(def, d), mid: pad(mid, m), fwd: pad(fwd, f) }
-  }, [xiPlayers, roster.need])
-
+  /* ---------- light enrichment for club/form/ict/short name ---------- */
   const [byElementCached, setByElementCached] = useState<Map<string, { club: string; form?: number; ict?: number; price?: number; short: string }>>(new Map())
   useEffect(() => { setByElementCached(new Map()) }, [team])
 
+  const byElementIdMemo = byElementId
+  const teamMetaMemo = teamMeta
   const enrich = (p?: any) => {
     if (!p) return { club: '—', form: undefined, ict: undefined, price: undefined, short: 'TEAM' }
-    const cached = byElementCached.get(keyOf(p))
+    const k = keyOf(p)
+    const cached = byElementCached.get(k)
     if (cached) return cached
-    const e = byElementId.get(Number(p.id))
-    const t = e ? teamMeta.get(e.team) : undefined
-    const form = e ? Number.parseFloat(e.form || '0') : undefined
-    const ict  = e ? Number.parseFloat(e.ict_index || '0') : undefined
-    const val = { club: t?.name || p.club || '—', form, ict, price: p.price, short: t?.short_name || 'TEAM' }
-    byElementCached.set(keyOf(p), val)
+    const e = byElementIdMemo.get(Number(p.id))
+    const t = e ? teamMetaMemo.get(e.team) : undefined
+    const val = {
+      club: t?.name || p.club || '—',
+      form: e ? Number.parseFloat(e.form || '0') : undefined,
+      ict:  e ? Number.parseFloat(e.ict_index || '0') : undefined,
+      price: p.price,
+      short: t?.short_name || 'TEAM'
+    }
+    byElementCached.set(k, val)
     return val
   }
 
+  /* ---------- card: everything inside, compact, name shows smartly ---------- */
   const PlayerCard = ({ k, zone }: { k: string, zone: 'XI'|'BENCH' }) => {
     const p = byKey.get(k)
     if (!p) return null
-    const displayFull = fullNameOf(p)
-    const displayShort = shortName(displayFull)      // 👈 use short display
+    const full = fullNameOf(p)
+    const name = shortName(full)
+    const g = detectGroup(p) ?? 'MID'
     const { club, form, ict, price, short } = enrich(p)
     const selected = pending === k
-    const g = detectGroup(p)
 
     return (
       <button
         onClick={() => onCardClick(k, zone)}
         className="card"
+        title={`${full} (${club})`}
         style={{
           borderRadius: 12,
-          padding: 'var(--tile-pad)',
-          width: '100%',
-          maxWidth: '100%',
           border: selected ? '2px solid #a855f7' : '1px solid rgba(255,255,255,0.12)',
           background: selected
-            ? 'linear-gradient(135deg, rgba(168,85,247,0.28), rgba(99,102,241,0.20))'
-            : 'rgba(0,0,0,0.22)',
+            ? 'linear-gradient(135deg, rgba(168,85,247,0.26), rgba(99,102,241,0.18))'
+            : 'rgba(0,0,0,0.20)',
           transition: 'box-shadow 120ms ease, border-color 120ms ease, background 120ms ease',
+          width: '100%',
+          maxWidth: '100%',
         }}
-        title={`${displayFull} (${club})`}
       >
-        <div style={{ display:'flex', gap:8, alignItems:'center', minWidth: 0 }}>
-          <div style={{ width: 'clamp(36px, 9vw, 46px)', display:'grid', placeItems:'center', flexShrink:0 }}>
+        <div className="pc-grid">
+          {/* jersey */}
+          <div style={{ width: 'clamp(34px, 9vw, 40px)', display:'grid', placeItems:'center', flexShrink:0 }}>
             <Jersey code={short} />
           </div>
-          <div style={{ flex:1, minWidth:0 }}>
-            <div
-              style={{
-                fontWeight: 900, color:'#fff',
-                whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
-                fontSize: 'var(--fs-lg)',   /* readable but compact */
-                letterSpacing: 0.1
-              }}
-              title={displayFull}
-            >
-              {displayShort}
-            </div>
-            <div className="subtle" style={{ display:'flex', gap:6, alignItems:'center', flexWrap:'wrap', minHeight:16 }}>
-              <span className="chip" style={{ borderRadius: 10 }}>{g ?? 'MID'}</span>
-              <span className="chip" style={{ borderRadius: 10, maxWidth:'38vw', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }} title={club}>
+
+          {/* text: name + meta (inside card, ellipsis) */}
+          <div className="pc-text">
+            <div className="pc-name" title={full}>{name}</div>
+            <div className="pc-meta">
+              <span className="chip">{g}</span>
+              <span className="chip" style={{ maxWidth:'48vw', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }} title={club}>
                 {club}
               </span>
             </div>
           </div>
-          <div style={{ textAlign:'right', minWidth:'var(--stat-min)' }}>
-            <div style={{ fontWeight:900 }}>{form !== undefined ? form.toFixed(1) : '—'}</div>
-            <div className="subtle">ICT {ict !== undefined ? ict.toFixed(1) : '—'}</div>
-            {Number.isFinite(Number(price)) && <div className="subtle">{money(Number(price))}</div>}
+
+          {/* compact stats (inside card) */}
+          <div className="pc-stats">
+            <div className="val">{form !== undefined ? form.toFixed(1) : '—'}</div>
+            <div className="lbl">FORM</div>
+            <div className="lbl">ICT {ict !== undefined ? ict.toFixed(1) : '—'}</div>
+            {Number.isFinite(Number(price)) && <div className="lbl">{money(Number(price))}</div>}
           </div>
         </div>
       </button>
@@ -315,9 +356,9 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
       className="card"
       style={{
         borderRadius: 12,
-        padding: 'var(--tile-pad)',
+        padding: 'var(--pad)',
         width: '100%',
-        height: 78,
+        height: 76,
         border: '1px dashed rgba(255,255,255,0.18)',
         background: 'rgba(255,255,255,0.06)',
         opacity: 0.6
@@ -329,19 +370,8 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
   const FormationRow = ({ items }: { items: (any|null)[] }) => {
     const cols = Math.max(items.length, 1)
     return (
-      <div style={{ display:'grid', placeItems:'center', width:'100%', maxWidth: '100vw' }}>
-        <div
-          style={{
-            width:'100%',
-            maxWidth:'100vw',
-            display:'grid',
-            gridTemplateColumns:`repeat(${cols}, minmax(60px, 1fr))`, /* narrower min */
-            gap:8,
-            alignItems:'stretch',
-            minWidth:0
-          }}
-          className="FormationRows"
-        >
+      <div style={{ width:'100%', maxWidth:'100vw' }}>
+        <div className="FormationRows" style={{ ['--cols' as any]: cols } as any}>
           {items.map((p, i) => p
             ? <PlayerCard key={keyOf(p)} k={keyOf(p)} zone="XI" />
             : <Ghost key={`ghost-${i}`} />
@@ -352,7 +382,7 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
   }
 
   return (
-    <div className="screen" data-resp="view-team" style={{ height:'100vh', overflow:'hidden', maxWidth:'100vw' }}>
+    <div className="screen" data-resp="vt" style={{ height:'100vh', overflow:'hidden', maxWidth:'100vw' }}>
       {Responsive}
       <div className="container" style={{ padding: 0, height:'100%', display:'flex', flexDirection:'column', maxWidth:'100vw', overflowX:'hidden' }}>
         <TopBar
@@ -360,14 +390,15 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
           onBack={onBack}
           rightSlot={
             <div className="balance-chip"
-                 style={{ background:'rgba(255,255,255,0.08)', border:'1px solid rgba(255,255,255,0.12)', maxWidth:'42vw', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                 style={{ background:'rgba(255,255,255,0.08)', border:'1px solid rgba(255,255,255,0.12)', maxWidth:'42vw', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', fontSize:'var(--fs-xs)' }}>
               £{budget.toFixed(1)}m
             </div>
           }
         />
 
-        {/* Scrollable area */}
+        {/* Scrollable content */}
         <div style={{ overflowY:'auto', paddingBottom: 16, maxWidth:'100vw', overflowX:'hidden' }}>
+          {/* header / formation controls */}
           <div
             className="card"
             style={{
@@ -389,7 +420,6 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
                     onClick={() => setFormation(f)}
                     style={{
                       padding:'5px 8px',
-                      borderRadius:12,
                       background: formation === f
                         ? 'linear-gradient(135deg, rgba(168,85,247,0.55), rgba(59,130,246,0.55))'
                         : 'linear-gradient(135deg, rgba(255,255,255,0.09), rgba(255,255,255,0.05))',
@@ -407,15 +437,15 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
             </div>
           </div>
 
-          {/* Formation */}
+          {/* formation rows (cards are fully self-contained) */}
           <div style={{ display:'grid', gap: 12, padding: '0 10px', maxWidth:'100vw' }}>
-            <FormationRow items={rows.gk} />
-            <FormationRow items={rows.def} />
-            <FormationRow items={rows.mid} />
-            <FormationRow items={rows.fwd} />
+            <FormationRow items={roster.xi.filter(p => detectGroup(p) === 'GK').concat(new Array(1).fill(null)).slice(0,1)} />
+            <FormationRow items={roster.xi.filter(p => detectGroup(p) === 'DEF')} />
+            <FormationRow items={roster.xi.filter(p => detectGroup(p) === 'MID')} />
+            <FormationRow items={roster.xi.filter(p => detectGroup(p) === 'FWD')} />
           </div>
 
-          {/* Bench */}
+          {/* bench */}
           <div style={{ padding: '10px', maxWidth:'100vw' }}>
             <div style={{ fontWeight: 900, margin: '8px 0 6px', fontSize: 'var(--fs-lg)' }}>Bench</div>
             <div className="card" style={{ border: '1px solid rgba(255,255,255,0.12)' }}>
@@ -423,7 +453,7 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
                 {benchKeys
                   .filter(k => byKey.get(k))
                   .map(k => (
-                    <div key={k} style={{ flex:'0 0 clamp(150px, 62vw, 210px)', maxWidth:'90vw' }}>
+                    <div key={k} style={{ flex:'0 0 clamp(150px, 60vw, 210px)', maxWidth:'90vw' }}>
                       <PlayerCard k={k} zone="BENCH" />
                     </div>
                   ))}
