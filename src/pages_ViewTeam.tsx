@@ -284,7 +284,7 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
     />
   )
 
-  /* Fully fluid rows */
+  /* ✅ Fully fluid row (no fixed min widths) */
   const FormationRow = ({ items }: { items: (any|null)[] }) => {
     const cols = Math.max(items.length, 1)
     return (

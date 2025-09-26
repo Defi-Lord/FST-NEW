@@ -342,26 +342,21 @@ img, svg, video { max-width: 100%; height: auto; }
   backdrop-filter: blur(6px);
 }
 
-/* CreateTeam list columns as CSS variables */
+/* CreateTeam table column widths as variables (responsive) */
 :root {
-  --col-pos: 64px;     /* position column width */
-  --col-club: 100px;   /* club column width */
-  --col-price: 160px;  /* price+button column width */
+  --col-pos: 64px;     /* position */
+  --col-club: 100px;   /* club */
+  --col-price: 160px;  /* price + button */
 }
-
-/* Tighten on small phones */
 @media (max-width: 480px) {
   :root {
     --col-pos: 48px;
     --col-club: 72px;
     --col-price: 128px;
   }
-
   .topbar-title { font-size: 16px; }
   .container { padding-left: 10px; padding-right: 10px; }
 }
-
-/* Very small phones (SE/mini) */
 @media (max-width: 360px) {
   :root {
     --col-pos: 44px;
