@@ -63,6 +63,27 @@ function Jersey({ code }: { code: string }) {
 export default function ViewTeam({ onBack, onCreateTeam }: Props) {
   const { team, budget } = useApp()
 
+  // 🔧 Scoped responsive CSS (smaller fonts, tighter tiles, no horizontal scroll)
+  const Responsive = (
+    <style>{`
+      [data-resp="view-team"] {
+        --fs-sm: clamp(11px, 2.8vw, 13px);
+        --fs-md: clamp(12px, 3.1vw, 15px);
+        --fs-lg: clamp(14px, 3.5vw, 18px);
+        --stat-min: clamp(64px, 18vw, 86px);
+      }
+      [data-resp="view-team"] .container { max-width: 100%; overflow-x: hidden; }
+      [data-resp="view-team"] .subtle { font-size: var(--fs-sm); }
+      [data-resp="view-team"] .balance-chip { font-size: var(--fs-sm); }
+      [data-resp="view-team"] .card { font-size: var(--fs-md); }
+      [data-resp="view-team"] .chip { font-size: var(--fs-sm); }
+      [data-resp="view-team"] .pitch, [data-resp="view-team"] .FormationRows { max-width: 100vw; overflow-x: hidden; }
+      @media (max-width: 480px) {
+        [data-resp="view-team"] .card { padding: 10px !important; }
+      }
+    `}</style>
+  )
+
   const [byElementId, setByElementId] = useState<Map<number, ElementLite>>(new Map())
   const [teamMeta, setTeamMeta] = useState<Map<number, TeamMeta>>(new Map())
 
@@ -236,11 +257,18 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
         title={`${displayName} (${club})`}
       >
         <div style={{ display:'flex', gap:10, alignItems:'center', minWidth: 0 }}>
-          <div style={{ width: 52, display:'grid', placeItems:'center', flexShrink:0 }}>
+          <div style={{ width: 'clamp(42px, 10vw, 52px)', display:'grid', placeItems:'center', flexShrink:0 }}>
             <Jersey code={short} />
           </div>
           <div style={{ flex:1, minWidth:0 }}>
-            <div style={{ fontWeight: 900, color:'#fff', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+            <div
+              style={{
+                fontWeight: 900, color:'#fff',
+                whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+                fontSize: 'var(--fs-md)'
+              }}
+              title={displayName}
+            >
               {displayName}
             </div>
             <div className="subtle" style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', minHeight:18 }}>
@@ -254,7 +282,7 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
               )}
             </div>
           </div>
-          <div style={{ textAlign:'right', minWidth:72 }}>
+          <div style={{ textAlign:'right', minWidth:'var(--stat-min)' }}>
             <div style={{ fontWeight:900 }}>{form !== undefined ? form.toFixed(1) : '—'}</div>
             <div className="subtle">ICT {ict !== undefined ? ict.toFixed(1) : '—'}</div>
             {Number.isFinite(Number(price)) && <div className="subtle">{money(Number(price))}</div>}
@@ -289,11 +317,13 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
             width:'100%',
             maxWidth:'100vw',
             display:'grid',
-            gridTemplateColumns:`repeat(${cols}, minmax(0, 1fr))`,
+            /* min 64px slot on small screens so names can ellipsis without overflow */
+            gridTemplateColumns:`repeat(${cols}, minmax(64px, 1fr))`,
             gap:10,
             alignItems:'stretch',
             minWidth:0
           }}
+          className="FormationRows"
         >
           {items.map((p, i) => p
             ? <PlayerCard key={keyOf(p)} k={keyOf(p)} zone="XI" />
@@ -305,7 +335,8 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
   }
 
   return (
-    <div className="screen" style={{ height:'100vh', overflow:'hidden', maxWidth:'100vw' }}>
+    <div className="screen" data-resp="view-team" style={{ height:'100vh', overflow:'hidden', maxWidth:'100vw' }}>
+      {Responsive}
       <div className="container" style={{ padding: 0, height:'100%', display:'flex', flexDirection:'column', maxWidth:'100vw', overflowX:'hidden' }}>
         <TopBar
           title="Your Team"
@@ -331,7 +362,7 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
             }}
           >
             <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
-              <div style={{ fontWeight: 900, fontSize: 18, marginRight: 'auto' }}>This Week’s XI</div>
+              <div style={{ fontWeight: 900, fontSize: 'var(--fs-lg)', marginRight: 'auto' }}>This Week’s XI</div>
               <div className="subtle">Formation</div>
               <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
                 {FORMATIONS.map(f => (
@@ -352,7 +383,7 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
                   </button>
                 ))}
               </div>
-              <button className="btn-ghost" onClick={onCreateTeam}>Go to Create Team</button>
+              <button className="btn-ghost" onClick={onCreateTeam} style={{ fontSize: 'var(--fs-md)' }}>Go to Create Team</button>
             </div>
             <div className="subtle" style={{ marginTop: 6 }}>
               Tap a starter and a bench player (GK↔GK, outfield↔outfield) to substitute. Tip: tap again to deselect.
@@ -369,13 +400,13 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
 
           {/* Bench */}
           <div style={{ padding: '12px', maxWidth:'100vw' }}>
-            <div style={{ fontWeight: 900, margin: '12px 0 6px' }}>Bench</div>
+            <div style={{ fontWeight: 900, margin: '12px 0 6px', fontSize: 'var(--fs-lg)' }}>Bench</div>
             <div className="card" style={{ border: '1px solid rgba(255,255,255,0.12)' }}>
               <div style={{ display:'flex', gap:10, overflowX:'auto', padding: 8 }}>
                 {benchKeys
                   .filter(k => byKey.get(k))
                   .map(k => (
-                    <div key={k} style={{ flex:'0 0 220px', maxWidth:'80vw' }}>
+                    <div key={k} style={{ flex:'0 0 clamp(170px, 65vw, 220px)', maxWidth:'90vw' }}>
                       <PlayerCard k={k} zone="BENCH" />
                     </div>
                   ))}

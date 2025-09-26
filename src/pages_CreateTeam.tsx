@@ -141,19 +141,46 @@ export default function CreateTeam({
   const usedPct = Math.min(100, Math.max(0, (used / START_BUDGET) * 100))
 
   return (
-    <div className="screen">
+    <div className="screen" data-resp="create-team">
+      {/* Scoped responsive CSS so names fit, columns shrink, and no sideways scroll */}
+      <style>{`
+        [data-resp="create-team"] {
+          --fs-sm: clamp(11px, 2.9vw, 14px);
+          --fs-md: clamp(12px, 3.2vw, 16px);
+          --fs-lg: clamp(14px, 3.8vw, 18px);
+          --col-pos: clamp(42px, 13vw, 64px);
+          --col-club: clamp(72px, 26vw, 180px);
+          --col-price: clamp(100px, 26vw, 160px);
+        }
+        [data-resp="create-team"] .container { max-width: 100%; overflow-x: hidden; }
+        [data-resp="create-team"] .card { font-size: var(--fs-md); }
+        [data-resp="create-team"] .subtle { font-size: var(--fs-sm); }
+        [data-resp="create-team"] .topbar-title { font-size: var(--fs-lg); }
+        [data-resp="create-team"] .row { gap: 10px; }
+        [data-resp="create-team"] .avatar { width: clamp(28px, 7vw, 36px); height: clamp(28px, 7vw, 36px); border-radius: 999px; background: rgba(255,255,255,0.16); }
+        [data-resp="create-team"] .chip { font-size: var(--fs-sm); padding: 3px 8px; }
+        [data-resp="create-team"] .price { font-weight: 800; white-space: nowrap; }
+        [data-resp="create-team"] .input, [data-resp="create-team"] .select { font-size: var(--fs-md); }
+        [data-resp="create-team"] .progress { height: 8px; }
+        @media (max-width: 480px) {
+          [data-resp="create-team"] .btn-add, [data-resp="create-team"] .btn-remove, [data-resp="create-team"] .cta { font-size: var(--fs-md); padding: 8px 10px; }
+        }
+      `}</style>
+
       <div className="bg bg-field" />
       <div className="scrim" />
 
       <div className="container">
         {/* Top bar with Back + balance */}
-        <div className="topbar">
-          <div className="topbar-left">
+        <div className="topbar" style={{ gap: 8 }}>
+          <div className="topbar-left" style={{ minWidth: 0 }}>
             {onBack && <button className="btn-back" onClick={onBack}>←</button>}
-            <div className="topbar-title">Create Team</div>
+            <div className="topbar-title" style={{ minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              Create Team
+            </div>
           </div>
           <div className="topbar-right">
-            <span className="balance-chip">{formatMoney(budget)} left</span>
+            <span className="balance-chip" style={{ fontSize: 'var(--fs-sm)' }}>{formatMoney(budget)} left</span>
           </div>
         </div>
 
@@ -163,7 +190,7 @@ export default function CreateTeam({
         </div>
 
         {/* Filters + counters */}
-        <div className="form-row">
+        <div className="form-row" style={{ gap: 8, flexWrap: 'wrap' }}>
           <select className="select" value={pos} onChange={e => setPos(e.target.value as any)}>
             <option value="ALL">All</option>
             <option value="GK">GK</option>
@@ -200,7 +227,7 @@ export default function CreateTeam({
           <div className="list">
             {/* Header — uses responsive CSS vars */}
             <div className="card" style={{ fontWeight: 700 }}>
-              <div style={{ flex: 1 }}>Player</div>
+              <div style={{ flex: 1, minWidth: 0 }}>Player</div>
               <div style={{ width: 'var(--col-pos)', textAlign: 'center' }}>Pos</div>
               <div style={{ width: 'var(--col-club)', textAlign: 'center' }}>Club</div>
               <div style={{ width: 'var(--col-price)', textAlign: 'right' }}>Price</div>
@@ -213,23 +240,29 @@ export default function CreateTeam({
               const hint = already ? 'Already selected' : verdict.reason
 
               return (
-                <div key={`${p.id}`} className={`card row ${already ? 'pill-you' : ''}`}>
+                <div key={`${p.id}`} className={`card row ${already ? 'pill-you' : ''}`} style={{ alignItems: 'center' }}>
                   {/* LEFT: avatar + NAME (wrap up to 2 lines) */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 14, flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0 }}>
                     <div className="avatar" />
                     <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                       <strong
+                        title={p.name}
                         style={{
                           display: '-webkit-box',
                           WebkitLineClamp: 2,
                           WebkitBoxOrient: 'vertical',
                           overflow: 'hidden',
-                          lineHeight: 1.15
+                          lineHeight: 1.1,
+                          fontSize: 'var(--fs-md)'
                         }}
                       >
                         {p.name}
                       </strong>
-                      <span className="subtle" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      <span
+                        className="subtle"
+                        title={`${p.club} • ${p.position}`}
+                        style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                      >
                         {p.club} • {p.position}
                       </span>
                     </div>
@@ -237,17 +270,25 @@ export default function CreateTeam({
 
                   {/* FIXED COLUMNS (responsive via CSS vars) */}
                   <div style={{ width: 'var(--col-pos)', textAlign: 'center' }}>{p.position}</div>
-                  <div style={{ width: 'var(--col-club)', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  <div
+                    style={{
+                      width: 'var(--col-club)',
+                      textAlign: 'center',
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+                    }}
+                    title={p.club}
+                  >
                     {p.club}
                   </div>
 
-                  <div style={{ width: 'var(--col-price)', display: 'flex', justifyContent: 'flex-end', gap: 10, alignItems: 'center' }}>
+                  <div style={{ width: 'var(--col-price)', display: 'flex', justifyContent: 'flex-end', gap: 8, alignItems: 'center' }}>
                     <span className="price">{formatMoney(p.price)}</span>
                     <button
                       className={already ? 'btn-remove' : 'btn-add'}
                       onClick={() => already ? remove(p) : add(p)}
                       disabled={disabled}
                       title={hint}
+                      style={{ fontSize: 'var(--fs-sm)', padding: '6px 10px' }}
                     >
                       {already ? 'Remove' : 'Add'}
                     </button>
@@ -262,20 +303,26 @@ export default function CreateTeam({
 
         {/* Selected squad summary */}
         <div className="card" style={{ marginTop: 12 }}>
-          <h3 style={{ marginTop: 0 }}>Your Squad ({team.length}/{TOTAL_SQUAD})</h3>
+          <h3 style={{ marginTop: 0, fontSize: 'var(--fs-lg)' }}>Your Squad ({team.length}/{TOTAL_SQUAD})</h3>
           <ul style={{ listStyle: 'none', padding: 0, display: 'grid', gap: 6 }}>
             {team.map(p => (
               <li key={`s-${p.id}`} className="row" style={{ gap: 8 }}>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0 }}>
                   <div className="avatar" />
-                  <div>
-                    <div style={{ fontWeight: 600 }}>{p.name}</div>
-                    <small className="subtle">{p.club} • {p.position}</small>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={p.name}>
+                      {p.name}
+                    </div>
+                    <small className="subtle" title={`${p.club} • ${p.position}`}>
+                      {p.club} • {p.position}
+                    </small>
                   </div>
                 </div>
                 <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
                   <span>{formatMoney(p.price)}</span>
-                  <button className="btn-remove" onClick={() => remove(p)}>Remove</button>
+                  <button className="btn-remove" onClick={() => remove(p)} style={{ fontSize: 'var(--fs-sm)', padding: '6px 10px' }}>
+                    Remove
+                  </button>
                 </div>
               </li>
             ))}
@@ -293,7 +340,7 @@ export default function CreateTeam({
             className="cta"
             onClick={() => complete ? onNext() : alert('Select 15 players within budget and position limits.')}
             disabled={!complete}
-            style={{ opacity: complete ? 1 : 0.6, width: '100%' }}
+            style={{ opacity: complete ? 1 : 0.6, width: '100%', fontSize: 'var(--fs-md)', padding: '10px 12px' }}
           >
             {complete ? 'Continue' : 'Select 15 players'}
           </button>
