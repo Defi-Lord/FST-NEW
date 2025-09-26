@@ -11,7 +11,7 @@ if (typeof window !== 'undefined') {
 }
 
 /** Squad rules */
-const START_BUDGET = 100.0            // shown via context, but kept here for progress calc
+const START_BUDGET = 100.0
 const LIMITS: Record<Position, number> = { GK: 2, DEF: 5, MID: 5, FWD: 3 }
 const TOTAL_SQUAD = 15
 const CLUB_CAP = 3
@@ -27,8 +27,8 @@ type FplElement = {
   id: number
   web_name: string
   team: number
-  now_cost: number        // tenths of a million (e.g. 96 -> £9.6m)
-  element_type: number    // 1 GK, 2 DEF, 3 MID, 4 FWD
+  now_cost: number
+  element_type: number
   form: string
 }
 type FplTeam = { id: number; name: string }
@@ -42,14 +42,13 @@ export default function CreateTeam({
   onNext: () => void
   onBack?: () => void
 }) {
-  const { team, addPlayer, removePlayer, budget } = useApp() // budget here is the remaining £
+  const { team, addPlayer, removePlayer, budget } = useApp()
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
   const [all, setAll] = useState<Player[]>([])
   const [q, setQ] = useState('')
   const [pos, setPos] = useState<'ALL' | Position>('ALL')
 
-  // Load live FPL player pool (proxied) with fallback to local JSON
   useEffect(() => {
     let mounted = true
     ;(async () => {
@@ -95,7 +94,7 @@ export default function CreateTeam({
     return () => { mounted = false }
   }, [])
 
-  /** Derived trackers (selected = global context `team`) */
+  /** Derived trackers */
   const posCount = useMemo(() => {
     const c: Record<Position, number> = { GK: 0, DEF: 0, MID: 0, FWD: 0 }
     team.forEach((p: Player) => { c[p.position]++ })
@@ -129,7 +128,7 @@ export default function CreateTeam({
   const add = (p: Player) => {
     const v = canAdd(p)
     if (!v.ok) return alert(v.reason)
-    addPlayer(p) // writes to global context + adjusts remaining budget
+    addPlayer(p)
   }
   const remove = (p: Player) => removePlayer(p.id)
 
@@ -138,7 +137,6 @@ export default function CreateTeam({
     (['GK', 'DEF', 'MID', 'FWD'] as Position[]).every(k => posCount[k] === LIMITS[k]) &&
     budget >= 0
 
-  /** Budget progress bar uses starting budget (100) vs used */
   const used = START_BUDGET - budget
   const usedPct = Math.min(100, Math.max(0, (used / START_BUDGET) * 100))
 
@@ -216,16 +214,32 @@ export default function CreateTeam({
 
               return (
                 <div key={`${p.id}`} className={`card row ${already ? 'pill-you' : ''}`}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 14, flex: 1 }}>
+                  {/* LEFT: avatar + NAME (wrap up to 2 lines) */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 14, flex: 1, minWidth: 0 }}>
                     <div className="avatar" />
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                      <strong>{p.name}</strong>
-                      <span className="subtle">{p.club} • {p.position}</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                      <strong
+                        style={{
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden',
+                          lineHeight: 1.15
+                        }}
+                      >
+                        {p.name}
+                      </strong>
+                      <span className="subtle" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {p.club} • {p.position}
+                      </span>
                     </div>
                   </div>
 
+                  {/* FIXED COLUMNS (responsive via CSS vars) */}
                   <div style={{ width: 'var(--col-pos)', textAlign: 'center' }}>{p.position}</div>
-                  <div style={{ width: 'var(--col-club)', textAlign: 'center' }}>{p.club}</div>
+                  <div style={{ width: 'var(--col-club)', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {p.club}
+                  </div>
 
                   <div style={{ width: 'var(--col-price)', display: 'flex', justifyContent: 'flex-end', gap: 10, alignItems: 'center' }}>
                     <span className="price">{formatMoney(p.price)}</span>

@@ -30,10 +30,7 @@ type ElementLite = { id: number; team: number; form: string; ict_index: string }
 type TeamMeta    = { id: number; name: string; short_name: string }
 
 const keyOf = (p: any) => String(p?.id ?? p?.code ?? p?.name ?? p?.web_name ?? p?.player_name ?? Math.random())
-
-const getName = (p: any) =>
-  String(p?.name ?? p?.web_name ?? p?.fullName ?? p?.player_name ?? p?.short_name ?? 'Player')
-
+const getName = (p: any) => String(p?.name ?? p?.web_name ?? p?.fullName ?? p?.player_name ?? p?.short_name ?? 'Player')
 const money = (n?: number) => (n !== undefined && Number.isFinite(Number(n))) ? `£${Number(n).toFixed(1)}m` : ''
 
 function hashHue(key: string) { let h = 0; for (let i=0;i<key.length;i++) h = (h*31 + key.charCodeAt(i))>>>0; return h%360 }
@@ -228,6 +225,7 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
           borderRadius: 14,
           padding: 10,
           width: '100%',
+          maxWidth: '100%',
           border: selected ? '2px solid #a855f7' : '1px solid rgba(255,255,255,0.12)',
           background: selected
             ? 'linear-gradient(135deg, rgba(168,85,247,0.30), rgba(99,102,241,0.24))'
@@ -242,11 +240,9 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
             <Jersey code={short} />
           </div>
           <div style={{ flex:1, minWidth:0 }}>
-            {/* NAME in white */}
             <div style={{ fontWeight: 900, color:'#fff', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
               {displayName}
             </div>
-            {/* Club only when selected */}
             <div className="subtle" style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', minHeight:18 }}>
               {selected ? (
                 <>
@@ -284,16 +280,16 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
     />
   )
 
-  /* ✅ Fully fluid row (no fixed min widths) */
   const FormationRow = ({ items }: { items: (any|null)[] }) => {
     const cols = Math.max(items.length, 1)
     return (
-      <div style={{ display:'grid', placeItems:'center', width:'100%' }}>
+      <div style={{ display:'grid', placeItems:'center', width:'100%', maxWidth: '100vw' }}>
         <div
           style={{
             width:'100%',
+            maxWidth:'100vw',
             display:'grid',
-            gridTemplateColumns:`repeat(${cols}, 1fr)`,
+            gridTemplateColumns:`repeat(${cols}, minmax(0, 1fr))`,
             gap:10,
             alignItems:'stretch',
             minWidth:0
@@ -309,21 +305,21 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
   }
 
   return (
-    <div className="screen" style={{ height:'100vh', overflow:'hidden', overflowX:'hidden' }}>
-      <div className="container" style={{ padding: 0, height:'100%', display:'flex', flexDirection:'column' }}>
+    <div className="screen" style={{ height:'100vh', overflow:'hidden', maxWidth:'100vw' }}>
+      <div className="container" style={{ padding: 0, height:'100%', display:'flex', flexDirection:'column', maxWidth:'100vw', overflowX:'hidden' }}>
         <TopBar
           title="Your Team"
           onBack={onBack}
           rightSlot={
             <div className="balance-chip"
-                 style={{ background:'rgba(255,255,255,0.08)', border:'1px solid rgba(255,255,255,0.12)'}}>
+                 style={{ background:'rgba(255,255,255,0.08)', border:'1px solid rgba(255,255,255,0.12)', maxWidth:'40vw', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
               £{budget.toFixed(1)}m
             </div>
           }
         />
 
         {/* Scrollable content */}
-        <div style={{ overflowY:'auto', paddingBottom: 18 }}>
+        <div style={{ overflowY:'auto', paddingBottom: 18, maxWidth:'100vw', overflowX:'hidden' }}>
           <div
             className="card"
             style={{
@@ -364,7 +360,7 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
           </div>
 
           {/* Formation layout (rows) */}
-          <div style={{ display:'grid', gap: 14, padding: '0 12px' }}>
+          <div style={{ display:'grid', gap: 14, padding: '0 12px', maxWidth:'100vw' }}>
             <FormationRow items={rows.gk} />
             <FormationRow items={rows.def} />
             <FormationRow items={rows.mid} />
@@ -372,14 +368,14 @@ export default function ViewTeam({ onBack, onCreateTeam }: Props) {
           </div>
 
           {/* Bench */}
-          <div style={{ padding: '12px' }}>
+          <div style={{ padding: '12px', maxWidth:'100vw' }}>
             <div style={{ fontWeight: 900, margin: '12px 0 6px' }}>Bench</div>
             <div className="card" style={{ border: '1px solid rgba(255,255,255,0.12)' }}>
               <div style={{ display:'flex', gap:10, overflowX:'auto', padding: 8 }}>
                 {benchKeys
                   .filter(k => byKey.get(k))
                   .map(k => (
-                    <div key={k} style={{ flex:'0 0 260px' }}>
+                    <div key={k} style={{ flex:'0 0 220px', maxWidth:'80vw' }}>
                       <PlayerCard k={k} zone="BENCH" />
                     </div>
                   ))}

@@ -327,12 +327,11 @@ body{
 
 /* existing ghost + mini team styles you already have are fine */
 
-/* --- Global mobile guards (non-destructive) --- */
+/* --- Global mobile guards (already added) --- */
 html, body, #root { max-width: 100%; overflow-x: hidden; }
 .screen, .container { max-width: 100vw; overflow-x: hidden; box-sizing: border-box; }
 img, svg, video { max-width: 100%; height: auto; }
 
-/* Respect iPhone safe-area (bottom home bar) */
 .safe-bottom { height: calc(env(safe-area-inset-bottom, 0px) + 12px); }
 .bottom-actions {
   position: sticky;
@@ -350,17 +349,17 @@ img, svg, video { max-width: 100%; height: auto; }
 }
 @media (max-width: 480px) {
   :root {
-    --col-pos: 48px;
+    --col-pos: 44px;
     --col-club: 72px;
-    --col-price: 128px;
+    --col-price: 120px;  /* give Player column more room */
   }
   .topbar-title { font-size: 16px; }
   .container { padding-left: 10px; padding-right: 10px; }
 }
 @media (max-width: 360px) {
   :root {
-    --col-pos: 44px;
+    --col-pos: 40px;
     --col-club: 64px;
-    --col-price: 120px;
+    --col-price: 112px;
   }
 }
