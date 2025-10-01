@@ -4,8 +4,8 @@ import { useApp, type Player, type Position } from './state'
 import TopBar from './components_TopBar'
 import { fetchBootstrap } from './api'
 
-// Debug sentinel
-export const __CREATE_TEAM_FILE_ID__ = 'CreateTeam.V3.Responsive.CompactNames+StickyHeaderFooter';
+// Debug sentinel (optional)
+export const __CREATE_TEAM_FILE_ID__ = 'CreateTeam.V4.StickyHeader+Tray+Footer.SearchFirst+Tabs';
 
 const START_BUDGET = 100.0
 const LIMITS: Record<Position, number> = { GK: 2, DEF: 5, MID: 5, FWD: 3 }
@@ -18,7 +18,7 @@ const countBy = <K extends string>(arr: Record<K, any>[], key: K) =>
     const k = String(it[key]); acc[k] = (acc[k] ?? 0) + 1; return acc
   }, {})
 
-/** Smart short name: "Erling Braut Haaland" → "E. Haaland"; "Jean-Kévin Augustin" → "J. Augustin" */
+/** Short name: "Erling Braut Haaland" → "E. Haaland" */
 function shortName(full: string): string {
   const clean = String(full || '').trim().replace(/\s+/g, ' ')
   if (!clean) return full
@@ -26,10 +26,7 @@ function shortName(full: string): string {
   const last = parts[parts.length - 1]
   const first = parts[0]
   const initial = first ? (first[0].toUpperCase() + '.') : ''
-  // If last looks like an initial (rare), fall back to two parts
-  if (last.length <= 2 && parts.length >= 2) {
-    return `${initial} ${parts[parts.length - 2]}`
-  }
+  if (last.length <= 2 && parts.length >= 2) return `${initial} ${parts[parts.length - 2]}`
   return `${initial} ${last}`
 }
 
@@ -78,9 +75,9 @@ export default function CreateTeam({
         }))
         if (!mounted) return
         setAll(mapped)
-      } catch (e) {
+      } catch {
         if (!mounted) return
-        setErr('Couldn’t load real FPL players. Showing fallback list — check your /api proxy.')
+        setErr('Couldn’t load FPL players. Check your /api proxy; using fallback if present.')
         try {
           const r = await fetch('/fallback-players.json', { cache: 'no-store' })
           const arr = await r.json()
@@ -93,9 +90,7 @@ export default function CreateTeam({
             form: Number(p.form ?? 0),
           }))
           setAll(mapped)
-        } catch {
-          setAll([])
-        }
+        } catch { setAll([]) }
       } finally {
         if (mounted) setLoading(false)
       }
@@ -108,6 +103,7 @@ export default function CreateTeam({
     team.forEach((p: Player) => { c[p.position]++ })
     return c
   }, [team])
+
   const clubCount = useMemo(() => countBy(team, 'club'), [team])
 
   const filtered = useMemo(() => {
@@ -148,7 +144,7 @@ export default function CreateTeam({
 
   return (
     <div className="screen" data-resp="create-team">
-      {/* Scoped + sticky UI styles (ct-*) */}
+      {/* Scoped styles for this page only */}
       <style>{`
         [data-resp="create-team"] {
           --fs-xs: clamp(9px, 2.4vw, 12px);
@@ -162,7 +158,6 @@ export default function CreateTeam({
         [data-resp="create-team"] .container { max-width: 100%; overflow-x: hidden; }
         [data-resp="create-team"] .card { font-size: var(--fs-md); padding: 10px; }
         [data-resp="create-team"] .subtle { font-size: var(--fs-sm); }
-        [data-resp="create-team"] .topbar-title { font-size: var(--fs-lg); }
         [data-resp="create-team"] .row { gap: 8px; }
         [data-resp="create-team"] .avatar { width: clamp(24px, 6vw, 32px); height: clamp(24px, 6vw, 32px); border-radius: 999px; background: rgba(255,255,255,0.16); }
         [data-resp="create-team"] .chip { font-size: var(--fs-xs); padding: 2px 6px; }
@@ -171,14 +166,9 @@ export default function CreateTeam({
         [data-resp="create-team"] .progress { height: 6px; }
         [data-resp="create-team"] .btn-add, [data-resp="create-team"] .btn-remove { font-size: var(--fs-sm); padding: 5px 8px; }
         [data-resp="create-team"] .cta { font-size: var(--fs-md); padding: 9px 10px; }
-        @media (max-width: 480px) {
-          [data-resp="create-team"] .card { padding: 8px; }
-        }
 
-        /* ===== Sticky bits (ct-*) ===== */
-        .ct-stick {
-          position: sticky; top: 0; z-index: 45;
-          backdrop-filter: blur(8px);
+        /* ===== Sticky header (search first, then tabs) ===== */
+        .ct-stick { position: sticky; top: 0; z-index: 45; backdrop-filter: blur(8px);
           background: linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.04));
           border-bottom: 1px solid rgba(255,255,255,0.12);
         }
@@ -186,97 +176,96 @@ export default function CreateTeam({
         .ct-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
         .ct-grow { flex: 1; min-width: 120px; }
 
-        .ct-tray {
-          position: sticky; top: 74px; z-index: 44;
+        .ct-tabs { display: flex; gap: 8px; padding: 0 8px 8px; overflow-x: auto; }
+        .ct-seg-btn {
+          appearance: none; border: 1px solid rgba(255,255,255,0.16);
+          background: linear-gradient(135deg, rgba(255,255,255,0.07), rgba(255,255,255,0.03));
+          color: #fff; border-radius: 999px; padding: 8px 14px; font-weight: 800; letter-spacing: .2px;
+        }
+        .ct-seg-btn.is-active { border-color: rgba(255,255,255,0.28); box-shadow: 0 6px 16px rgba(99,102,241,0.25); }
+
+        /* ===== Selected tray (always-on remove) ===== */
+        .ct-tray { position: sticky; top: 74px; z-index: 44; padding: 6px 8px;
           background: linear-gradient(135deg, rgba(168,85,247,0.10), rgba(59,130,246,0.10));
           border-bottom: 1px solid rgba(255,255,255,0.10);
-          padding: 6px 8px;
         }
         .ct-tray-list { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
-        .ct-chip {
-          display:flex; align-items:center; gap:6px;
-          border: 1px solid rgba(255,255,255,0.16);
-          background: rgba(255,255,255,0.06);
-          border-radius: 999px; padding:6px 8px;
-          color:#fff; white-space:nowrap;
+        .ct-chip { display: flex; align-items: center; gap: 6px; border: 1px solid rgba(255,255,255,0.16);
+          background: rgba(255,255,255,0.06); border-radius: 999px; padding: 6px 8px; color: #fff; white-space: nowrap;
           font-size: var(--fs-xs);
         }
         .ct-chip-text { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
-        .ct-chip-x {
-          appearance:none; border:0; background:transparent;
-          color:#fff; opacity:.9; font-weight:900; padding:0 4px; border-radius:6px;
-        }
+        .ct-chip-x { appearance: none; border: 0; background: transparent; color: #fff; opacity: .9; font-weight: 900; padding: 0 4px; border-radius: 6px; }
         .ct-chip-x:hover { background: rgba(255,255,255,0.10); }
 
-        .ct-footer {
-          position: sticky; bottom: 0; z-index: 46;
-          display:flex; align-items:center; justify-content:space-between; gap:12px;
-          padding:10px 12px;
-          backdrop-filter: blur(8px);
+        /* ===== Sticky footer (Continue) ===== */
+        .ct-footer { position: sticky; bottom: 0; z-index: 46; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+          padding: 10px 12px; backdrop-filter: blur(8px);
           background: linear-gradient(180deg, rgba(0,0,0,0.00), rgba(0,0,0,0.45));
           border-top: 1px solid rgba(255,255,255,0.14);
         }
-        .ct-foot-left { color:#fff; }
-        .ct-foot-title{ font-weight:800; }
-        .ct-foot-sub{ opacity:.85; font-size:12px; }
-        .ct-continue{
-          appearance:none; border:1px solid rgba(255,255,255,0.22);
+        .ct-foot-left { color: #fff; }
+        .ct-foot-title { font-weight: 800; }
+        .ct-foot-sub { opacity: .85; font-size: 12px; }
+        .ct-continue { appearance: none; border: 1px solid rgba(255,255,255,0.22);
           background: linear-gradient(135deg, rgba(99,102,241,0.65), rgba(236,72,153,0.65));
-          color:#fff; border-radius: 12px; padding:10px 16px; font-weight:900;
+          color: #fff; border-radius: 12px; padding: 10px 16px; font-weight: 900;
         }
-        .ct-continue[disabled]{ opacity:.5; cursor:not-allowed; }
+        .ct-continue[disabled] { opacity: .5; cursor: not-allowed; }
       `}</style>
 
       <div className="container">
-        {/* Top bar */}
-        <div className="topbar" style={{ gap: 6 }}>
-          <div className="topbar-left" style={{ minWidth: 0 }}>
-            {onBack && <button className="btn-back" onClick={onBack}>←</button>}
-            <div className="topbar-title" style={{ minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              Create Team
+        {/* TopBar (title/back + budget chip) */}
+        <TopBar
+          title="Create Team"
+          onBack={onBack}
+          rightSlot={
+            <div className="balance-chip" style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)'}}>
+              {formatMoney(budget)} left
             </div>
-          </div>
-          <div className="topbar-right">
-            <span className="balance-chip" style={{ fontSize: 'var(--fs-xs)' }}>{formatMoney(budget)} left</span>
-          </div>
-        </div>
+          }
+        />
 
         {/* Budget progress */}
         <div className="progress"><span style={{ width: `${usedPct}%` }} /></div>
 
-        {/* ===== STICKY HEADER: position select + counts + search ===== */}
+        {/* ===== STICKY HEADER: Search first, then position tabs ===== */}
         <div className="ct-stick">
           <div className="ct-top">
-            <div className="ct-row">
-              <select className="select" value={pos} onChange={e => setPos(e.target.value as any)}>
-                <option value="ALL">All</option>
-                <option value="GK">GK</option>
-                <option value="DEF">DEF</option>
-                <option value="MID">MID</option>
-                <option value="FWD">FWD</option>
-              </select>
-
-              <div className="ct-grow" />
-
-              <div className="chip">GK {posCount.GK}/{LIMITS.GK}</div>
-              <div className="chip">DEF {posCount.DEF}/{LIMITS.DEF}</div>
-              <div className="chip">MID {posCount.MID}/{LIMITS.MID}</div>
-              <div className="chip">FWD {posCount.FWD}/{LIMITS.FWD}</div>
-              <div className="chip">Total {team.length}/{TOTAL_SQUAD}</div>
-            </div>
-
+            {/* Search row */}
             <div className="ct-row">
               <input
                 className="input ct-grow"
-                placeholder="Search player, club, or position…"
+                placeholder="Search players…"
                 value={q}
                 onChange={e => setQ(e.target.value)}
+                aria-label="Search players"
               />
+              {/* Optional budget chip on the right */}
+              <span className="chip" title="Budget left">{formatMoney(budget)}</span>
             </div>
+
+            {/* Segmented position tabs */}
+            <div className="ct-tabs" role="tablist" aria-label="Positions">
+              {(['ALL','GK','DEF','MID','FWD'] as const).map(t => (
+                <button
+                  key={t}
+                  role="tab"
+                  aria-selected={pos === t}
+                  onClick={() => setPos(t as any)}
+                  className={`ct-seg-btn ${pos === t ? 'is-active' : ''}`}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+
+            {/* Optional compact total indicator (keep or remove as you like) */}
+            <div className="subtle" style={{ padding: '0 10px 2px' }}>{team.length}/{TOTAL_SQUAD} selected</div>
           </div>
         </div>
 
-        {/* ===== MINI SELECTED TRAY (always-on remove) ===== */}
+        {/* ===== MINI SELECTED TRAY: instant remove (✕) ===== */}
         {team.length > 0 && (
           <div className="ct-tray" aria-label="Selected players">
             <div className="ct-tray-list">
@@ -290,7 +279,7 @@ export default function CreateTeam({
           </div>
         )}
 
-        {/* ===== PLAYERS LIST (UNCHANGED) ===== */}
+        {/* ===== PLAYERS SECTION (UNCHANGED) ===== */}
         {loading && <div className="card">Loading players…</div>}
         {err && <div className="card" style={{ borderColor: 'crimson' }}>{err}</div>}
 
@@ -312,18 +301,13 @@ export default function CreateTeam({
 
               return (
                 <div key={`${p.id}`} className={`card row ${already ? 'pill-you' : ''}`} style={{ alignItems: 'center' }}>
-                  {/* NAME (short) */}
+                  {/* NAME */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 }}>
                     <div className="avatar" />
                     <div style={{ display:'flex', flexDirection:'column', minWidth: 0 }}>
                       <strong
                         title={p.name}
-                        style={{
-                          whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
-                          lineHeight: 1.05,
-                          fontSize: 'var(--fs-lg)',
-                          letterSpacing: 0.1
-                        }}
+                        style={{ whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', lineHeight: 1.05, fontSize: 'var(--fs-lg)', letterSpacing: 0.1 }}
                       >
                         {shortName(p.name)}
                       </strong>
@@ -340,12 +324,7 @@ export default function CreateTeam({
                   {/* POS / CLUB / PRICE */}
                   <div style={{ width: 'var(--col-pos)', textAlign: 'center', fontSize:'var(--fs-sm)' }}>{p.position}</div>
                   <div
-                    style={{
-                      width: 'var(--col-club)',
-                      textAlign: 'center',
-                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                      fontSize:'var(--fs-sm)'
-                    }}
+                    style={{ width: 'var(--col-club)', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize:'var(--fs-sm)' }}
                     title={p.club}
                   >
                     {p.club}
@@ -370,7 +349,7 @@ export default function CreateTeam({
           </div>
         )}
 
-        {/* Selected squad (unchanged) */}
+        {/* Your Squad (unchanged) */}
         <div className="card" style={{ marginTop: 10 }}>
           <h3 style={{ marginTop: 0, fontSize: 'var(--fs-lg)' }}>Your Squad ({team.length}/{TOTAL_SQUAD})</h3>
           <ul style={{ listStyle: 'none', padding: 0, display: 'grid', gap: 6 }}>
@@ -401,13 +380,12 @@ export default function CreateTeam({
           </div>
         </div>
 
-        {/* ===== Sticky footer (always-on Continue) ===== */}
+        {/* Sticky footer (always-on Continue) */}
         <div className="ct-footer">
           <div className="ct-foot-left">
             <div className="ct-foot-title">Squad</div>
             <div className="ct-foot-sub">
-              {team.length}/{TOTAL_SQUAD}
-              {team.length < TOTAL_SQUAD ? ` · ${TOTAL_SQUAD - team.length} to go` : ''}
+              {team.length}/{TOTAL_SQUAD}{team.length < TOTAL_SQUAD ? ` · ${TOTAL_SQUAD - team.length} to go` : ''}
             </div>
           </div>
           <button
@@ -419,7 +397,6 @@ export default function CreateTeam({
           </button>
         </div>
 
-        {/* keep a safe bottom spacer to avoid last card being hidden behind footer on iOS */}
         <div className="safe-bottom" style={{ height: 12 }} />
       </div>
     </div>
