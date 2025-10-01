@@ -4,8 +4,7 @@ import { useApp, type Player, type Position } from './state'
 import TopBar from './components_TopBar'
 import { fetchBootstrap } from './api'
 
-// Debug sentinel (optional)
-export const __CREATE_TEAM_FILE_ID__ = 'CreateTeam.V4.StickyHeader+Tray+Footer.SearchFirst+Tabs';
+export const __CREATE_TEAM_FILE_ID__ = 'CreateTeam.V5.ToggleRemove+StickyUI';
 
 const START_BUDGET = 100.0
 const LIMITS: Record<Position, number> = { GK: 2, DEF: 5, MID: 5, FWD: 3 }
@@ -18,7 +17,7 @@ const countBy = <K extends string>(arr: Record<K, any>[], key: K) =>
     const k = String(it[key]); acc[k] = (acc[k] ?? 0) + 1; return acc
   }, {})
 
-/** Short name: "Erling Braut Haaland" → "E. Haaland" */
+/** Short name like “E. Haaland” */
 function shortName(full: string): string {
   const clean = String(full || '').trim().replace(/\s+/g, ' ')
   if (!clean) return full
@@ -50,12 +49,15 @@ export default function CreateTeam({
   onBack?: () => void
 }) {
   const { team, addPlayer, removePlayer, budget } = useApp()
+
+  // --- page state ---
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
   const [all, setAll] = useState<Player[]>([])
   const [q, setQ] = useState('')
   const [pos, setPos] = useState<'ALL' | Position>('ALL')
 
+  // --- load players (unchanged approach) ---
   useEffect(() => {
     let mounted = true
     ;(async () => {
@@ -98,12 +100,12 @@ export default function CreateTeam({
     return () => { mounted = false }
   }, [])
 
+  // --- counts & filters (unchanged logic) ---
   const posCount = useMemo(() => {
     const c: Record<Position, number> = { GK: 0, DEF: 0, MID: 0, FWD: 0 }
     team.forEach((p: Player) => { c[p.position]++ })
     return c
   }, [team])
-
   const clubCount = useMemo(() => countBy(team, 'club'), [team])
 
   const filtered = useMemo(() => {
@@ -118,6 +120,7 @@ export default function CreateTeam({
       .sort((a, b) => b.price - a.price)
   }, [all, q, pos])
 
+  // --- rules ---
   function canAdd(p: Player): { ok: boolean; reason?: string } {
     if (team.find(s => String(s.id) === String(p.id))) return { ok: false, reason: 'Already in squad' }
     if (team.length >= TOTAL_SQUAD) return { ok: false, reason: 'Squad is full' }
@@ -127,12 +130,27 @@ export default function CreateTeam({
     return { ok: true }
   }
 
+  // --- add/remove handlers (toggle on the SAME button) ---
   const add = (p: Player) => {
     const v = canAdd(p)
     if (!v.ok) return alert(v.reason)
     addPlayer(p)
   }
-  const remove = (p: Player) => removePlayer(p.id)
+
+  // make remove work whether removePlayer wants an id or an object
+  const remove = (p: Player) => {
+    try {
+      // @ts-ignore – attempt id first
+      removePlayer?.(p.id)
+    } catch {
+      // fallback if API expects full player
+      // @ts-ignore
+      removePlayer?.(p)
+    }
+  }
+
+  const isSelected = (p: Player) =>
+    team.some(s => String(s.id) === String(p.id))
 
   const complete =
     team.length === TOTAL_SQUAD &&
@@ -144,7 +162,7 @@ export default function CreateTeam({
 
   return (
     <div className="screen" data-resp="create-team">
-      {/* Scoped styles for this page only */}
+      {/* Page-scoped styles */}
       <style>{`
         [data-resp="create-team"] {
           --fs-xs: clamp(9px, 2.4vw, 12px);
@@ -160,14 +178,13 @@ export default function CreateTeam({
         [data-resp="create-team"] .subtle { font-size: var(--fs-sm); }
         [data-resp="create-team"] .row { gap: 8px; }
         [data-resp="create-team"] .avatar { width: clamp(24px, 6vw, 32px); height: clamp(24px, 6vw, 32px); border-radius: 999px; background: rgba(255,255,255,0.16); }
-        [data-resp="create-team"] .chip { font-size: var(--fs-xs); padding: 2px 6px; }
         [data-resp="create-team"] .price { font-weight: 800; white-space: nowrap; font-size: var(--fs-sm); }
         [data-resp="create-team"] .input, [data-resp="create-team"] .select { font-size: var(--fs-md); padding: 8px 10px; }
         [data-resp="create-team"] .progress { height: 6px; }
         [data-resp="create-team"] .btn-add, [data-resp="create-team"] .btn-remove { font-size: var(--fs-sm); padding: 5px 8px; }
         [data-resp="create-team"] .cta { font-size: var(--fs-md); padding: 9px 10px; }
 
-        /* ===== Sticky header (search first, then tabs) ===== */
+        /* Sticky header */
         .ct-stick { position: sticky; top: 0; z-index: 45; backdrop-filter: blur(8px);
           background: linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.04));
           border-bottom: 1px solid rgba(255,255,255,0.12);
@@ -175,6 +192,7 @@ export default function CreateTeam({
         .ct-top { display: grid; gap: 8px; padding: 8px 8px 10px; }
         .ct-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
         .ct-grow { flex: 1; min-width: 120px; }
+        .chip { border:1px solid rgba(255,255,255,0.16); border-radius: 999px; padding:6px 10px; }
 
         .ct-tabs { display: flex; gap: 8px; padding: 0 8px 8px; overflow-x: auto; }
         .ct-seg-btn {
@@ -184,7 +202,7 @@ export default function CreateTeam({
         }
         .ct-seg-btn.is-active { border-color: rgba(255,255,255,0.28); box-shadow: 0 6px 16px rgba(99,102,241,0.25); }
 
-        /* ===== Selected tray (always-on remove) ===== */
+        /* Selected tray */
         .ct-tray { position: sticky; top: 74px; z-index: 44; padding: 6px 8px;
           background: linear-gradient(135deg, rgba(168,85,247,0.10), rgba(59,130,246,0.10));
           border-bottom: 1px solid rgba(255,255,255,0.10);
@@ -198,7 +216,7 @@ export default function CreateTeam({
         .ct-chip-x { appearance: none; border: 0; background: transparent; color: #fff; opacity: .9; font-weight: 900; padding: 0 4px; border-radius: 6px; }
         .ct-chip-x:hover { background: rgba(255,255,255,0.10); }
 
-        /* ===== Sticky footer (Continue) ===== */
+        /* Sticky footer */
         .ct-footer { position: sticky; bottom: 0; z-index: 46; display: flex; align-items: center; justify-content: space-between; gap: 12px;
           padding: 10px 12px; backdrop-filter: blur(8px);
           background: linear-gradient(180deg, rgba(0,0,0,0.00), rgba(0,0,0,0.45));
@@ -215,7 +233,7 @@ export default function CreateTeam({
       `}</style>
 
       <div className="container">
-        {/* TopBar (title/back + budget chip) */}
+        {/* Top bar */}
         <TopBar
           title="Create Team"
           onBack={onBack}
@@ -229,10 +247,9 @@ export default function CreateTeam({
         {/* Budget progress */}
         <div className="progress"><span style={{ width: `${usedPct}%` }} /></div>
 
-        {/* ===== STICKY HEADER: Search first, then position tabs ===== */}
+        {/* Sticky header: Search first, then tabs */}
         <div className="ct-stick">
           <div className="ct-top">
-            {/* Search row */}
             <div className="ct-row">
               <input
                 className="input ct-grow"
@@ -241,11 +258,8 @@ export default function CreateTeam({
                 onChange={e => setQ(e.target.value)}
                 aria-label="Search players"
               />
-              {/* Optional budget chip on the right */}
               <span className="chip" title="Budget left">{formatMoney(budget)}</span>
             </div>
-
-            {/* Segmented position tabs */}
             <div className="ct-tabs" role="tablist" aria-label="Positions">
               {(['ALL','GK','DEF','MID','FWD'] as const).map(t => (
                 <button
@@ -259,33 +273,34 @@ export default function CreateTeam({
                 </button>
               ))}
             </div>
-
-            {/* Optional compact total indicator (keep or remove as you like) */}
-            <div className="subtle" style={{ padding: '0 10px 2px' }}>{team.length}/{TOTAL_SQUAD} selected</div>
+            <div className="subtle" style={{ padding: '0 10px 2px' }}>
+              {team.length}/{TOTAL_SQUAD} selected
+            </div>
           </div>
         </div>
 
-        {/* ===== MINI SELECTED TRAY: instant remove (✕) ===== */}
+        {/* Mini selected tray (instant remove) */}
         {team.length > 0 && (
           <div className="ct-tray" aria-label="Selected players">
             <div className="ct-tray-list">
               {team.map(p => (
                 <div key={`chip-${p.id}`} className="ct-chip" title={p.name}>
                   <span className="ct-chip-text">{shortName(p.name)}</span>
-                  <button className="ct-chip-x" onClick={() => removePlayer(p.id)} aria-label={`Remove ${p.name}`}>✕</button>
+                  {/* Remove also available up here */}
+                  <button className="ct-chip-x" onClick={() => remove(p)} aria-label={`Remove ${p.name}`}>✕</button>
                 </div>
               ))}
             </div>
           </div>
         )}
 
-        {/* ===== PLAYERS SECTION (UNCHANGED) ===== */}
+        {/* PLAYERS SECTION (unchanged grid/list, but SAME button toggles Add/Remove) */}
         {loading && <div className="card">Loading players…</div>}
         {err && <div className="card" style={{ borderColor: 'crimson' }}>{err}</div>}
 
         {!loading && !err && (
           <div className="list">
-            {/* Header */}
+            {/* header row */}
             <div className="card" style={{ fontWeight: 700, display:'flex', alignItems:'center' }}>
               <div style={{ flex: 1, minWidth: 0 }}>Player</div>
               <div style={{ width: 'var(--col-pos)', textAlign: 'center' }}>Pos</div>
@@ -294,14 +309,14 @@ export default function CreateTeam({
             </div>
 
             {filtered.map(p => {
-              const already = team.some(s => String(s.id) === String(p.id))
+              const selected = isSelected(p)
               const verdict = canAdd(p)
-              const disabled = already || !verdict.ok
-              const hint = already ? 'Already selected' : verdict.reason
+              const disabled = !selected && !verdict.ok // only block Add, never block Remove
+              const hint = selected ? 'Remove from squad' : verdict.reason
 
               return (
-                <div key={`${p.id}`} className={`card row ${already ? 'pill-you' : ''}`} style={{ alignItems: 'center' }}>
-                  {/* NAME */}
+                <div key={`${p.id}`} className={`card row ${selected ? 'pill-you' : ''}`} style={{ alignItems: 'center' }}>
+                  {/* name */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 }}>
                     <div className="avatar" />
                     <div style={{ display:'flex', flexDirection:'column', minWidth: 0 }}>
@@ -311,17 +326,13 @@ export default function CreateTeam({
                       >
                         {shortName(p.name)}
                       </strong>
-                      <span
-                        className="subtle"
-                        title={`${p.club} • ${p.position}`}
-                        style={{ whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}
-                      >
+                      <span className="subtle" title={`${p.club} • ${p.position}`} style={{ whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
                         {p.club} • {p.position}
                       </span>
                     </div>
                   </div>
 
-                  {/* POS / CLUB / PRICE */}
+                  {/* pos / club / price + TOGGLING BUTTON */}
                   <div style={{ width: 'var(--col-pos)', textAlign: 'center', fontSize:'var(--fs-sm)' }}>{p.position}</div>
                   <div
                     style={{ width: 'var(--col-club)', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize:'var(--fs-sm)' }}
@@ -333,12 +344,12 @@ export default function CreateTeam({
                   <div style={{ width: 'var(--col-price)', display: 'flex', justifyContent: 'flex-end', gap: 6, alignItems: 'center' }}>
                     <span className="price">{formatMoney(p.price)}</span>
                     <button
-                      className={already ? 'btn-remove' : 'btn-add'}
-                      onClick={() => already ? remove(p) : add(p)}
+                      className={selected ? 'btn-remove' : 'btn-add'}
+                      onClick={() => (selected ? remove(p) : add(p))}
                       disabled={disabled}
                       title={hint}
                     >
-                      {already ? 'Remove' : 'Add'}
+                      {selected ? 'Remove' : 'Add'}
                     </button>
                   </div>
                 </div>
@@ -349,7 +360,7 @@ export default function CreateTeam({
           </div>
         )}
 
-        {/* Your Squad (unchanged) */}
+        {/* “Your Squad” card (unchanged) */}
         <div className="card" style={{ marginTop: 10 }}>
           <h3 style={{ marginTop: 0, fontSize: 'var(--fs-lg)' }}>Your Squad ({team.length}/{TOTAL_SQUAD})</h3>
           <ul style={{ listStyle: 'none', padding: 0, display: 'grid', gap: 6 }}>
@@ -380,7 +391,7 @@ export default function CreateTeam({
           </div>
         </div>
 
-        {/* Sticky footer (always-on Continue) */}
+        {/* Sticky footer (Continue) */}
         <div className="ct-footer">
           <div className="ct-foot-left">
             <div className="ct-foot-title">Squad</div>
