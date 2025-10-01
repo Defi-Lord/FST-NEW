@@ -19,11 +19,15 @@ import HowToPlay from './pages_HowToPlay'
 import AboutUs from './pages_AboutUs'
 import ContactUs from './pages_ContactUs'
 
+// NEW: Connect wallet page
+import ConnectWallet from './pages_ConnectWallet'
+
 // keep the drawer styles global
 import './styles/menu-drawer.css'
 
 type Route =
   | 'landing'
+  | 'connect'     // ⬅️ NEW
   | 'contest'
   | 'create'
   | 'leaderboard'
@@ -97,29 +101,38 @@ function App() {
     }
   }
 
+  // optional: remember connected wallet locally (backend later)
+  const [wallet, setWallet] = useState<string | null>(() => {
+    try { return localStorage.getItem('sol_wallet') } catch { return null }
+  })
+  const handleConnected = (addr: string) => {
+    setWallet(addr)
+    go('contest') // ⬅️ after connect, proceed to JoinContest
+  }
+
   return (
     <>
-      {route === 'landing' && <Landing onLaunch={() => go('contest')} />}
+      {/* Landing → Connect (changed from 'contest' to 'connect') */}
+      {route === 'landing' && <Landing onLaunch={() => go('connect')} />}
+
+      {/* NEW: Connect Wallet page */}
+      {route === 'connect' && (
+        <ConnectWallet
+          onBack={back}
+          onConnected={handleConnected}
+        />
+      )}
 
       {route === 'contest' && (
-        <JoinContest
-          onSelect={() => go('create')}
-          onBack={back}
-        />
+        <JoinContest onSelect={() => go('create')} onBack={back} />
       )}
 
       {route === 'create' && (
-        <CreateTeam
-          onNext={() => go('leaderboard')}
-          onBack={back}
-        />
+        <CreateTeam onNext={() => go('leaderboard')} onBack={back} />
       )}
 
       {route === 'leaderboard' && (
-        <Leaderboard
-          onNext={() => go('rewards')}
-          onBack={back}
-        />
+        <Leaderboard onNext={() => go('rewards')} onBack={back} />
       )}
 
       {route === 'rewards' && <Rewards onClaim={() => go('home')} />}
