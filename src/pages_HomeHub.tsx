@@ -2,7 +2,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useApp } from './state'
 import TopBar from './components_TopBar'
-import { fetchFixtures, fetchBootstrap, fetchElementSummary } from './api' // uses your Vercel /api routes
+import MenuDrawer from './components/menu-drawer'
+import { fetchFixtures, fetchBootstrap, fetchElementSummary } from './api'
 
 type Props = {
   onViewTeam?: () => void
@@ -14,6 +15,9 @@ type Props = {
   onStats?: () => void
   onBack?: () => void
   onTop10?: () => void
+  onHowToPlay?: () => void
+  onAboutUs?: () => void
+  onContactUs?: () => void
 }
 
 type LbEntry = { name: string; points: number }
@@ -32,9 +36,7 @@ async function loadLeaderboardPreview(timeoutMs = 7000): Promise<LbEntry[] | nul
 class AbortSignalController {
   private controller = new AbortController()
   private timer: any
-  constructor(ms: number) {
-    this.timer = setTimeout(() => this.controller.abort('timeout'), ms)
-  }
+  constructor(ms: number) { this.timer = setTimeout(() => this.controller.abort('timeout'), ms) }
   get signal() { return this.controller.signal }
   clear() { clearTimeout(this.timer) }
 }
@@ -42,37 +44,24 @@ class AbortSignalController {
 function formatLocal(dtIso: string) {
   try {
     const d = new Date(dtIso)
-    return d.toLocaleString(undefined, {
-      weekday: 'short', month: 'short', day: 'numeric',
-      hour: '2-digit', minute: '2-digit'
-    })
+    return d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
   } catch { return dtIso }
 }
 
 type NextFixtureView = { home: string; away: string; kickoff_utc: string }
 
 async function loadNextFixtureFromFPL(): Promise<NextFixtureView | null> {
-  const [fixtures, bootstrap] = await Promise.all([
-    fetchFixtures(),        // /api/fpl/fixtures?future=1
-    fetchBootstrap()        // /api/fpl/bootstrap-static
-  ])
-
+  const [fixtures, bootstrap] = await Promise.all([ fetchFixtures(), fetchBootstrap() ])
   const teamNameById = new Map<number, string>()
-  if (bootstrap?.teams) {
-    for (const t of bootstrap.teams) teamNameById.set(t.id, t.name)
-  }
+  if (bootstrap?.teams) for (const t of bootstrap.teams) teamNameById.set(t.id, t.name)
 
   const upcoming = (fixtures || [])
     .filter((f: any) => !!f.kickoff_time)
-    .sort((a: any, b: any) =>
-      new Date(a.kickoff_time).getTime() - new Date(b.kickoff_time).getTime()
-    )[0]
+    .sort((a: any, b: any) => new Date(a.kickoff_time).getTime() - new Date(b.kickoff_time).getTime())[0]
 
   if (!upcoming) return null
-
   const home = teamNameById.get(upcoming.team_h) || `Team ${upcoming.team_h}`
   const away = teamNameById.get(upcoming.team_a) || `Team ${upcoming.team_a}`
-
   return { home, away, kickoff_utc: upcoming.kickoff_time }
 }
 
@@ -94,9 +83,7 @@ async function sumWeeklyPointsForTeam(playerIds: (string|number)[], round: numbe
     playerIds.map(async (id) => {
       try {
         const s = await fetchElementSummary(id)
-        const row = Array.isArray(s?.history)
-          ? s.history.find((h: any) => Number(h.round) === Number(round))
-          : null
+        const row = Array.isArray(s?.history) ? s.history.find((h: any) => Number(h.round) === Number(round)) : null
         const pts = Number(row?.total_points ?? 0)
         return Number.isFinite(pts) ? pts : 0
       } catch { return 0 }
@@ -107,15 +94,8 @@ async function sumWeeklyPointsForTeam(playerIds: (string|number)[], round: numbe
 /* ===== end helpers ===== */
 
 export default function HomeHub({
-  onViewTeam,
-  onCreateTeam,
-  onJoinContest,
-  onLeaderboard,
-  onTransfers,
-  onFixtures,
-  onStats,
-  onBack,
-  onTop10
+  onViewTeam, onCreateTeam, onJoinContest, onLeaderboard, onTransfers, onFixtures, onStats, onBack, onTop10,
+  onHowToPlay, onAboutUs, onContactUs
 }: Props) {
   const { fullName, budget, team } = useApp()
   const picked = team.length
@@ -123,6 +103,7 @@ export default function HomeHub({
 
   const [lb, setLb] = useState<LbEntry[] | null | 'error'>(null)
   const [fixture, setFixture] = useState<NextFixtureView | null | 'error'>(null)
+  const [menuOpen, setMenuOpen] = useState(false)
 
   useEffect(() => {
     let mounted = true
@@ -138,15 +119,19 @@ export default function HomeHub({
     return () => { mounted = false }
   }, [])
 
-  // sensible fallbacks so your main.tsx can pass only onViewTeam
+  // sensible fallbacks
   const handleViewTeam   = onViewTeam ?? (() => alert('Open Team'))
   const handleCreateTeam = onCreateTeam ?? handleViewTeam
   const handleTransfers  = onTransfers ?? (() => alert('Transfers coming soon'))
-  const handleFixtures   = onFixtures ?? (() => alert('Fixtures coming soon')) // ← navigates to Fixtures page
+  const handleFixtures   = onFixtures ?? (() => alert('Fixtures coming soon'))
   const handleStats      = onStats ?? (() => alert('Stats coming soon'))
   const handleJoin       = onJoinContest ?? (() => alert('Join contest coming soon'))
   const handleLb         = onLeaderboard ?? (() => alert('Leaderboard coming soon'))
   const handleTop10      = onTop10 ?? (() => alert('Top 10 coming soon'))
+
+  const goHowToPlay = onHowToPlay ?? (() => alert('How to Play'))
+  const goAboutUs   = onAboutUs   ?? (() => alert('About Us'))
+  const goContact   = onContactUs ?? (() => alert('Contact Us'))
 
   const primaryAction = picked < 15
     ? { label: `Pick ${15 - picked} more`, onClick: handleCreateTeam }
@@ -174,11 +159,8 @@ export default function HomeHub({
         const events: FplEvent[] = data?.events ?? []
         const { round: r, label } = resolveLatestFinishedRound(events)
         if (!mounted) return
-        setRound(r)
-        setRoundLabel(label)
-      } finally {
-        if (mounted) setLoadingGW(false)
-      }
+        setRound(r); setRoundLabel(label)
+      } finally { if (mounted) setLoadingGW(false) }
     })()
     return () => { mounted = false }
   }, [])
@@ -207,6 +189,11 @@ export default function HomeHub({
         <TopBar
           title="Home"
           onBack={onBack}
+          leftSlot={
+            <button className="hamburger-btn" aria-label="Open menu" onClick={() => setMenuOpen(true)}>
+              <div className="hamburger-lines"><div /><div /><div /></div>
+            </button>
+          }
           rightSlot={
             <div className="balance-chip" style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)'}}>
               £{budget.toFixed(1)}m
@@ -220,7 +207,7 @@ export default function HomeHub({
           <div className="subtle">{fullName}</div>
         </div>
 
-        {/* Squad status (polished) */}
+        {/* Squad status */}
         <div className="card" style={{
           marginBottom:14,
           border: '1px solid rgba(255,255,255,0.12)',
@@ -250,7 +237,7 @@ export default function HomeHub({
           )}
         </div>
 
-        {/* Next Fixture – via /api (polished) */}
+        {/* Next Fixture */}
         <div className="title-xl" style={{margin:'18px 0 8px'}}>Next Fixture</div>
         <div className="card" style={{ border: '1px solid rgba(255,255,255,0.12)'}}>
           {fixture === null && <div className="subtle">Loading next match…</div>}
@@ -266,13 +253,12 @@ export default function HomeHub({
                   </div>
                 )}
               </div>
-              {/* THIS BUTTON navigates to the dedicated Fixtures page */}
               <button className="btn-ghost" onClick={handleFixtures}>View fixtures</button>
             </div>
           )}
         </div>
 
-        {/* Featured (polished) */}
+        {/* Featured */}
         <div className="title-xl" style={{margin:'18px 0 12px'}}>Featured</div>
         <div className="hero" style={{
           background: 'linear-gradient(135deg, rgba(99,102,241,0.18), rgba(236,72,153,0.18))',
@@ -363,6 +349,16 @@ export default function HomeHub({
         <button className="tab" onClick={handleLb}><span>Live</span></button>
         <button className="tab" onClick={handleViewTeam}><span>Profile</span></button>
       </nav>
+
+      {/* Drawer overlay */}
+      <MenuDrawer
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        onHome={() => { onBack?.(); setMenuOpen(false) }}
+        onHowToPlay={() => { goHowToPlay(); setMenuOpen(false) }}
+        onContact={() => { goContact(); setMenuOpen(false) }}
+        onAbout={() => { goAboutUs(); setMenuOpen(false) }}
+      />
     </div>
   )
 }

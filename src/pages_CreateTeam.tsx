@@ -5,7 +5,7 @@ import TopBar from './components_TopBar'
 import { fetchBootstrap } from './api'
 
 // Debug sentinel
-export const __CREATE_TEAM_FILE_ID__ = 'CreateTeam.V3.Responsive.CompactNames';
+export const __CREATE_TEAM_FILE_ID__ = 'CreateTeam.V3.Responsive.CompactNames+StickyHeaderFooter';
 
 const START_BUDGET = 100.0
 const LIMITS: Record<Position, number> = { GK: 2, DEF: 5, MID: 5, FWD: 3 }
@@ -148,7 +148,7 @@ export default function CreateTeam({
 
   return (
     <div className="screen" data-resp="create-team">
-      {/* Scoped, more aggressive responsive compaction */}
+      {/* Scoped + sticky UI styles (ct-*) */}
       <style>{`
         [data-resp="create-team"] {
           --fs-xs: clamp(9px, 2.4vw, 12px);
@@ -174,9 +174,61 @@ export default function CreateTeam({
         @media (max-width: 480px) {
           [data-resp="create-team"] .card { padding: 8px; }
         }
+
+        /* ===== Sticky bits (ct-*) ===== */
+        .ct-stick {
+          position: sticky; top: 0; z-index: 45;
+          backdrop-filter: blur(8px);
+          background: linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.04));
+          border-bottom: 1px solid rgba(255,255,255,0.12);
+        }
+        .ct-top { display: grid; gap: 8px; padding: 8px 8px 10px; }
+        .ct-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .ct-grow { flex: 1; min-width: 120px; }
+
+        .ct-tray {
+          position: sticky; top: 74px; z-index: 44;
+          background: linear-gradient(135deg, rgba(168,85,247,0.10), rgba(59,130,246,0.10));
+          border-bottom: 1px solid rgba(255,255,255,0.10);
+          padding: 6px 8px;
+        }
+        .ct-tray-list { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+        .ct-chip {
+          display:flex; align-items:center; gap:6px;
+          border: 1px solid rgba(255,255,255,0.16);
+          background: rgba(255,255,255,0.06);
+          border-radius: 999px; padding:6px 8px;
+          color:#fff; white-space:nowrap;
+          font-size: var(--fs-xs);
+        }
+        .ct-chip-text { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+        .ct-chip-x {
+          appearance:none; border:0; background:transparent;
+          color:#fff; opacity:.9; font-weight:900; padding:0 4px; border-radius:6px;
+        }
+        .ct-chip-x:hover { background: rgba(255,255,255,0.10); }
+
+        .ct-footer {
+          position: sticky; bottom: 0; z-index: 46;
+          display:flex; align-items:center; justify-content:space-between; gap:12px;
+          padding:10px 12px;
+          backdrop-filter: blur(8px);
+          background: linear-gradient(180deg, rgba(0,0,0,0.00), rgba(0,0,0,0.45));
+          border-top: 1px solid rgba(255,255,255,0.14);
+        }
+        .ct-foot-left { color:#fff; }
+        .ct-foot-title{ font-weight:800; }
+        .ct-foot-sub{ opacity:.85; font-size:12px; }
+        .ct-continue{
+          appearance:none; border:1px solid rgba(255,255,255,0.22);
+          background: linear-gradient(135deg, rgba(99,102,241,0.65), rgba(236,72,153,0.65));
+          color:#fff; border-radius: 12px; padding:10px 16px; font-weight:900;
+        }
+        .ct-continue[disabled]{ opacity:.5; cursor:not-allowed; }
       `}</style>
 
       <div className="container">
+        {/* Top bar */}
         <div className="topbar" style={{ gap: 6 }}>
           <div className="topbar-left" style={{ minWidth: 0 }}>
             {onBack && <button className="btn-back" onClick={onBack}>←</button>}
@@ -189,35 +241,56 @@ export default function CreateTeam({
           </div>
         </div>
 
+        {/* Budget progress */}
         <div className="progress"><span style={{ width: `${usedPct}%` }} /></div>
 
-        <div className="form-row" style={{ gap: 6, flexWrap: 'wrap' }}>
-          <select className="select" value={pos} onChange={e => setPos(e.target.value as any)}>
-            <option value="ALL">All</option>
-            <option value="GK">GK</option>
-            <option value="DEF">DEF</option>
-            <option value="MID">MID</option>
-            <option value="FWD">FWD</option>
-          </select>
+        {/* ===== STICKY HEADER: position select + counts + search ===== */}
+        <div className="ct-stick">
+          <div className="ct-top">
+            <div className="ct-row">
+              <select className="select" value={pos} onChange={e => setPos(e.target.value as any)}>
+                <option value="ALL">All</option>
+                <option value="GK">GK</option>
+                <option value="DEF">DEF</option>
+                <option value="MID">MID</option>
+                <option value="FWD">FWD</option>
+              </select>
 
-          <div style={{ flex: 1 }} />
+              <div className="ct-grow" />
 
-          <div className="chip">GK {posCount.GK}/{LIMITS.GK}</div>
-          <div className="chip">DEF {posCount.DEF}/{LIMITS.DEF}</div>
-          <div className="chip">MID {posCount.MID}/{LIMITS.MID}</div>
-          <div className="chip">FWD {posCount.FWD}/{LIMITS.FWD}</div>
-          <div className="chip">Total {team.length}/{TOTAL_SQUAD}</div>
+              <div className="chip">GK {posCount.GK}/{LIMITS.GK}</div>
+              <div className="chip">DEF {posCount.DEF}/{LIMITS.DEF}</div>
+              <div className="chip">MID {posCount.MID}/{LIMITS.MID}</div>
+              <div className="chip">FWD {posCount.FWD}/{LIMITS.FWD}</div>
+              <div className="chip">Total {team.length}/{TOTAL_SQUAD}</div>
+            </div>
+
+            <div className="ct-row">
+              <input
+                className="input ct-grow"
+                placeholder="Search player, club, or position…"
+                value={q}
+                onChange={e => setQ(e.target.value)}
+              />
+            </div>
+          </div>
         </div>
 
-        <div className="search-row">
-          <input
-            className="input"
-            placeholder="Search player, club, or position…"
-            value={q}
-            onChange={e => setQ(e.target.value)}
-          />
-        </div>
+        {/* ===== MINI SELECTED TRAY (always-on remove) ===== */}
+        {team.length > 0 && (
+          <div className="ct-tray" aria-label="Selected players">
+            <div className="ct-tray-list">
+              {team.map(p => (
+                <div key={`chip-${p.id}`} className="ct-chip" title={p.name}>
+                  <span className="ct-chip-text">{shortName(p.name)}</span>
+                  <button className="ct-chip-x" onClick={() => removePlayer(p.id)} aria-label={`Remove ${p.name}`}>✕</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
+        {/* ===== PLAYERS LIST (UNCHANGED) ===== */}
         {loading && <div className="card">Loading players…</div>}
         {err && <div className="card" style={{ borderColor: 'crimson' }}>{err}</div>}
 
@@ -248,7 +321,7 @@ export default function CreateTeam({
                         style={{
                           whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
                           lineHeight: 1.05,
-                          fontSize: 'var(--fs-lg)',  /* slightly larger for readability */
+                          fontSize: 'var(--fs-lg)',
                           letterSpacing: 0.1
                         }}
                       >
@@ -297,7 +370,7 @@ export default function CreateTeam({
           </div>
         )}
 
-        {/* Selected squad (also short names) */}
+        {/* Selected squad (unchanged) */}
         <div className="card" style={{ marginTop: 10 }}>
           <h3 style={{ marginTop: 0, fontSize: 'var(--fs-lg)' }}>Your Squad ({team.length}/{TOTAL_SQUAD})</h3>
           <ul style={{ listStyle: 'none', padding: 0, display: 'grid', gap: 6 }}>
@@ -328,17 +401,26 @@ export default function CreateTeam({
           </div>
         </div>
 
-        <div className="bottom-actions">
+        {/* ===== Sticky footer (always-on Continue) ===== */}
+        <div className="ct-footer">
+          <div className="ct-foot-left">
+            <div className="ct-foot-title">Squad</div>
+            <div className="ct-foot-sub">
+              {team.length}/{TOTAL_SQUAD}
+              {team.length < TOTAL_SQUAD ? ` · ${TOTAL_SQUAD - team.length} to go` : ''}
+            </div>
+          </div>
           <button
-            className="cta"
+            className="ct-continue"
             onClick={() => complete ? onNext() : alert('Select 15 players within budget and position limits.')}
             disabled={!complete}
-            style={{ opacity: complete ? 1 : 0.6, width: '100%' }}
           >
-            {complete ? 'Continue' : 'Select 15 players'}
+            Continue
           </button>
         </div>
-        <div className="safe-bottom" />
+
+        {/* keep a safe bottom spacer to avoid last card being hidden behind footer on iOS */}
+        <div className="safe-bottom" style={{ height: 12 }} />
       </div>
     </div>
   )

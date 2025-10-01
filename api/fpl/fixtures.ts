@@ -1,14 +1,15 @@
-// api/fpl/fixtures.ts
-export default async function handler(req: any, res: any) {
+import type { VercelRequest, VercelResponse } from '@vercel/node'
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
-    const url = new URL(req.url || '', 'http://localhost') // ✅ base is required on Vercel
-    const future = url.searchParams.get('future')
-    const qs = future ? '?future=1' : ''
-    const r = await fetch(`https://fantasy.premierleague.com/api/fixtures/${qs}`)
+    const upstream = 'https://fantasy.premierleague.com/api/fixtures/?future=1'
+    const r = await fetch(upstream, { headers: { 'user-agent': 'FST/1.0' } })
+    if (!r.ok) return res.status(r.status).json({ error: 'upstream_error', status: r.status })
     const data = await r.json()
-    res.setHeader('Cache-Control', 's-maxage=120, stale-while-revalidate=300')
-    res.status(200).json(data)
-  } catch (e: any) {
-    res.status(500).json({ error: 'fixtures fetch failed', message: e?.message })
+    res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=60')
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    return res.status(200).json(data)
+  } catch (e) {
+    return res.status(500).json({ error: 'proxy_failed', details: String(e) })
   }
 }
