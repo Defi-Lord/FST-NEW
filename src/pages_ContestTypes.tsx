@@ -3,10 +3,12 @@ import React, { useMemo, useState } from 'react'
 import {
   Connection,
   SystemProgram,
-  Transaction,
   PublicKey,
   LAMPORTS_PER_SOL,
   clusterApiUrl,
+  // v0 txs (fixes staticAccountKeys error in some wallets)
+  TransactionMessage,
+  VersionedTransaction,
 } from '@solana/web3.js'
 
 type Props = {
@@ -17,7 +19,7 @@ type Props = {
 /* ===================== Config ===================== */
 const CLUSTER: 'devnet' | 'mainnet-beta' | 'testnet' = 'devnet'
 
-// ⬇️  IMPORTANT: paste a real wallet address here (base58). No spaces.
+// ⬇️  IMPORTANT: real base58 treasury address (no spaces)
 const TREASURY: string = '8569mYKpddFZsAkQYRrNgNiDKoYYd87UbmmpwvjJiyt2'
 
 // $5 entry for SOL path; token path sends a fixed amount below
@@ -76,9 +78,7 @@ function maskAddr(addr: string | null | undefined): string {
 function assertValidAddress(name: string, addr: string) {
   const trimmed = (addr || '').trim()
   try {
-    // this throws if invalid
-    // also catches invisible characters, spaces, etc.
-    new PublicKey(trimmed)
+    new PublicKey(trimmed) // throws if invalid
   } catch {
     throw new Error(`${name} address is invalid. Please paste a valid base58 Solana address.`)
   }
@@ -133,7 +133,7 @@ export default function ContestTypes({ onBack, onJoined }: Props) {
     }
   }
 
-  /** Path A: real SOL transfer */
+  /** Path A: real SOL transfer (VersionedTransaction v0) */
   async function payWithSol() {
     const provider = getProvider()
     if (!provider) throw new Error('No Solana wallet detected.')
@@ -146,7 +146,6 @@ export default function ContestTypes({ onBack, onJoined }: Props) {
       provider?.publicKey?.toString?.()
     if (!fromBase58) throw new Error('Could not read wallet public key')
 
-    // ✅ validate addresses early
     const fromPk = new PublicKey(assertValidAddress('Sender', fromBase58))
     const toPk   = new PublicKey(assertValidAddress('Treasury', TREASURY))
 
@@ -160,19 +159,24 @@ export default function ContestTypes({ onBack, onJoined }: Props) {
     const conn = new Connection(clusterApiUrl(CLUSTER), 'confirmed')
     const ix = SystemProgram.transfer({ fromPubkey: fromPk, toPubkey: toPk, lamports: amountLamports })
 
-    const tx = new Transaction().add(ix)
-    tx.feePayer = fromPk
-    tx.recentBlockhash = (await conn.getLatestBlockhash('finalized')).blockhash
+    // v0 message + VersionedTransaction
+    const { blockhash } = await conn.getLatestBlockhash('finalized')
+    const msg = new TransactionMessage({
+      payerKey: fromPk,
+      recentBlockhash: blockhash,
+      instructions: [ix],
+    }).compileToV0Message()
+    const tx = new VersionedTransaction(msg)
 
     const sigRes = await provider.signAndSendTransaction(tx)
     const signature: string = sigRes?.signature || sigRes
     if (!signature) throw new Error('No transaction signature returned by wallet')
 
-    await conn.confirmTransaction({ signature, ...(await conn.getLatestBlockhash()) }, 'confirmed')
+    await conn.confirmTransaction(signature, 'confirmed')
     setLastSig(signature); setLastSigState(signature)
   }
 
-  /** Path B: SPL Test Token transfer (only if TEST_TOKEN_MINT is set) */
+  /** Path B: SPL Test Token transfer (VersionedTransaction v0; only if TEST_TOKEN_MINT is set) */
   async function payWithToken() {
     if (!tokenEnabled) throw new Error('Test token mint not configured.')
     const provider = getProvider()
@@ -210,15 +214,20 @@ export default function ContestTypes({ onBack, onJoined }: Props) {
       fromAta, toAta, fromPk, Number(amount), [], spl.TOKEN_PROGRAM_ID
     ))
 
-    const tx = new Transaction().add(...ixes)
-    tx.feePayer = fromPk
-    tx.recentBlockhash = (await conn.getLatestBlockhash('finalized')).blockhash
+    // v0 message + VersionedTransaction
+    const { blockhash } = await conn.getLatestBlockhash('finalized')
+    const msg = new TransactionMessage({
+      payerKey: fromPk,
+      recentBlockhash: blockhash,
+      instructions: ixes,
+    }).compileToV0Message()
+    const tx = new VersionedTransaction(msg)
 
     const sigRes = await provider.signAndSendTransaction(tx)
     const signature: string = sigRes?.signature || sigRes
     if (!signature) throw new Error('No transaction signature returned by wallet')
 
-    await conn.confirmTransaction({ signature, ...(await conn.getLatestBlockhash()) }, 'confirmed')
+    await conn.confirmTransaction(signature, 'confirmed')
     setLastSig(signature); setLastSigState(signature)
   }
 
@@ -351,7 +360,7 @@ function Style() {
       }
 
       .ct-grid { display:grid; gap:12px; grid-template-columns: 1fr; }
-      @media (min-width: 720px) { .ct-grid { grid-template-columns: 1fr 1 1fr; } }
+      @media (min-width: 720px) { .ct-grid { grid-template-columns: 1fr 1fr 1fr; } }
 
       .ct-item { position:relative; overflow:hidden; }
       .ct-item::before {
