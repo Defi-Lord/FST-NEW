@@ -15,41 +15,38 @@ type Props = {
 }
 
 /* ===================== Config ===================== */
-// Use 'devnet' for testing. Switch to 'mainnet-beta' for production.
+/** Use 'devnet' while testing; switch to 'mainnet-beta' when live */
 const CLUSTER: 'devnet' | 'mainnet-beta' | 'testnet' = 'devnet'
 
-// <-- PUT YOUR TREASURY (recipient) WALLET ADDRESS HERE
-const TREASURY = 'YOUR_TREASURY_WALLET_ADDRESS'
+/** Your treasury (recipient) wallet */
+const TREASURY = 'YOUR_TREASURY_WALLET_ADDRESS' // <-- set this
 
-// Entry price (USD). We’ll convert to SOL using a price value (see getSolUsd()).
+/** Entry price in USD (for SOL path). For test token path, we send a fixed "5 units" by default. */
 const ENTRY_USD = 5
 
-// Fallback SOL price (USD) if you haven’t wired a live price yet.
-// You can override at runtime with: localStorage.setItem('sol_usd', '136.42')
+/** Fallback SOL price (USD) if you haven’t wired a live price yet. */
 const SOL_PRICE_FALLBACK = 150
 
-/* ===================== Helpers ===================== */
-const hasWallet = () => {
-  try { return !!localStorage.getItem('sol_wallet') } catch { return false }
-}
-const setContestMode = (mode: 'weekly'|'monthly'|'seasonal') => {
-  try { localStorage.setItem('contest_mode', mode) } catch {}
-}
-const setLastSig = (sig: string) => {
-  try { localStorage.setItem('last_entry_sig', sig) } catch {}
-}
-const getLastSig = () => {
-  try { return localStorage.getItem('last_entry_sig') } catch { return null }
-}
+/** OPTIONAL: Devnet Test Token (SPL) settings.
+ *  If you provide a mint, the page will offer a "Test Token" option.
+ *  Example: create your own mint on devnet and put the address here.
+ */
+const TEST_TOKEN_MINT = '' // e.g. '9xyz...MintAddressOnDevnet' (leave empty to hide token option)
+const TEST_TOKEN_DECIMALS = 6 // USDC-like; adjust to your mint
+/** Amount of test token to send for entry.
+ *  If you want it to represent $5 exactly with a 6-decimal token, use 5 * 10^6 = 5_000_000
+ */
+const TEST_TOKEN_AMOUNT = 5n * BigInt(10 ** TEST_TOKEN_DECIMALS)
 
-// Read a SOL/USD price from localStorage if you’ve set one; otherwise fallback.
-// Later you can replace this with a fetch to your backend price endpoint.
+/* ===================== Helpers ===================== */
+const hasWallet = () => { try { return !!localStorage.getItem('sol_wallet') } catch { return false } }
+const setContestMode = (mode: 'weekly'|'monthly'|'seasonal') => { try { localStorage.setItem('contest_mode', mode) } catch {} }
+const setLastSig = (sig: string) => { try { localStorage.setItem('last_entry_sig', sig) } catch {} }
+const getLastSig = () => { try { return localStorage.getItem('last_entry_sig') } catch { return null } }
+
+/** Read a SOL/USD price (override via: localStorage.setItem('sol_usd','136.42')) */
 const getSolUsd = (): number => {
-  try {
-    const v = localStorage.getItem('sol_usd')
-    const n = v ? parseFloat(v) : NaN
-    return Number.isFinite(n) && n > 0 ? n : SOL_PRICE_FALLBACK
-  } catch { return SOL_PRICE_FALLBACK }
+  try { const v = localStorage.getItem('sol_usd'); const n = v ? parseFloat(v) : NaN; return Number.isFinite(n)&&n>0 ? n : SOL_PRICE_FALLBACK } catch { return SOL_PRICE_FALLBACK }
 }
 
 function lamportsFromUsd(usd: number, solUsdPrice: number): number {
@@ -58,7 +55,7 @@ function lamportsFromUsd(usd: number, solUsdPrice: number): number {
   return Math.round(sol * LAMPORTS_PER_SOL)
 }
 
-// Get any injected Solana provider (Phantom / Backpack / Solflare / Exodus)
+/** Get injected Solana provider (Phantom/Backpack/Solflare/Exodus) */
 function getProvider(): any | null {
   const w: any = typeof window !== 'undefined' ? window : {}
   if (w.solana?.isPhantom) return w.solana
@@ -69,6 +66,19 @@ function getProvider(): any | null {
   return null
 }
 
+/** Lazy import SPL-Token; if you haven’t installed it yet, we’ll pull from CDN. */
+async function getSpl() {
+  try {
+    const m = await import('@solana/spl-token')
+    return m
+  } catch {
+    const cdn = 'https://esm.sh/@solana/spl-token@0.4.7?bundle'
+    // @vite-ignore
+    const m = await import(cdn)
+    return m
+  }
+}
+
 /* ===================== Page ===================== */
 export default function ContestTypes({ onBack, onJoined }: Props) {
   const walletConnected = hasWallet()
@@ -76,6 +86,9 @@ export default function ContestTypes({ onBack, onJoined }: Props) {
   const [err, setErr] = useState<string | null>(null)
   const [paying, setPaying] = useState(false)
   const [lastSig, setLastSigState] = useState<string | null>(getLastSig())
+  const [payWith, setPayWith] = useState<'SOL'|'TOKEN'>(() => (TEST_TOKEN_MINT ? 'TOKEN' : 'SOL'))
+
+  const tokenEnabled = Boolean(TEST_TOKEN_MINT)
 
   const cards = useMemo(() => ([
     {
@@ -106,61 +119,20 @@ export default function ContestTypes({ onBack, onJoined }: Props) {
 
   function openJoin(mode: 'weekly'|'monthly'|'seasonal') {
     setErr(null)
-    if (!walletConnected) {
-      setErr('Connect your wallet first (Back → Connect Wallet).')
-      return
-    }
+    if (!walletConnected) { setErr('Connect your wallet first (Back → Connect Wallet).'); return }
     setModal({ mode })
   }
 
-  async function payAndJoinReal() {
+  async function payAndJoin() {
     if (!modal) return
-    setErr(null)
-    setPaying(true)
+    setErr(null); setPaying(true)
     try {
-      const provider = getProvider()
-      if (!provider) throw new Error('No Solana wallet detected. Open Phantom/Backpack/Solflare and try again.')
-
-      // Ensure we’re connected (opens wallet popup if needed)
-      const res = await provider.connect?.()
-      const fromBase58: string =
-        res?.publicKey?.toBase58?.() ||
-        res?.publicKey ||
-        provider?.publicKey?.toBase58?.() ||
-        provider?.publicKey?.toString?.()
-      if (!fromBase58) throw new Error('Could not read wallet public key')
-
-      const fromPk = new PublicKey(fromBase58)
-      const toPk = new PublicKey(TREASURY)
-
-      // Convert $5 → lamports using your price getter
-      const price = getSolUsd()
-      const lamports = lamportsFromUsd(ENTRY_USD, price)
-
-      // On devnet, apply a small floor (~0.002 SOL) to avoid dust if your fallback is stale
-      const min = Math.round(0.002 * LAMPORTS_PER_SOL)
-      const amountLamports = Math.max(lamports, CLUSTER === 'devnet' ? min : lamports)
-
-      // Build & send tx
-      const conn = new Connection(clusterApiUrl(CLUSTER), 'confirmed')
-      const ix = SystemProgram.transfer({ fromPubkey: fromPk, toPubkey: toPk, lamports: amountLamports })
-      const tx = new Transaction().add(ix)
-      tx.feePayer = fromPk
-      tx.recentBlockhash = (await conn.getLatestBlockhash('finalized')).blockhash
-
-      // Ask wallet to sign & send
-      const sigRes = await provider.signAndSendTransaction(tx)
-      const signature: string = sigRes?.signature || sigRes
-      if (!signature) throw new Error('No transaction signature returned by wallet')
-
-      // Wait for confirmation
-      await conn.confirmTransaction({ signature, ...(await conn.getLatestBlockhash()) }, 'confirmed')
-
-      // Save receipt + contest mode for downstream rules (CreateTeam/transfers)
-      setLastSig(signature)
-      setLastSigState(signature)
+      if (payWith === 'TOKEN') {
+        await payWithToken()
+      } else {
+        await payWithSol()
+      }
       setContestMode(modal.mode)
-
       setModal(null)
       onJoined(modal.mode)
     } catch (e: any) {
@@ -168,6 +140,104 @@ export default function ContestTypes({ onBack, onJoined }: Props) {
     } finally {
       setPaying(false)
     }
+  }
+
+  /** Path A: real SOL transfer (devnet by default) */
+  async function payWithSol() {
+    const provider = getProvider()
+    if (!provider) throw new Error('No Solana wallet detected.')
+
+    const res = await provider.connect?.()
+    const fromBase58: string =
+      res?.publicKey?.toBase58?.() ||
+      res?.publicKey ||
+      provider?.publicKey?.toBase58?.() ||
+      provider?.publicKey?.toString?.()
+    if (!fromBase58) throw new Error('Could not read wallet public key')
+
+    const fromPk = new PublicKey(fromBase58)
+    const toPk = new PublicKey(TREASURY)
+
+    const price = getSolUsd()
+    const lamports = lamportsFromUsd(ENTRY_USD, price)
+
+    // Devnet floor (~0.002 SOL) to avoid dust with stale price
+    const min = Math.round(0.002 * LAMPORTS_PER_SOL)
+    const amountLamports = Math.max(lamports, CLUSTER === 'devnet' ? min : lamports)
+
+    const conn = new Connection(clusterApiUrl(CLUSTER), 'confirmed')
+    const ix = SystemProgram.transfer({ fromPubkey: fromPk, toPubkey: toPk, lamports: amountLamports })
+
+    const tx = new Transaction().add(ix)
+    tx.feePayer = fromPk
+    tx.recentBlockhash = (await conn.getLatestBlockhash('finalized')).blockhash
+
+    const sigRes = await provider.signAndSendTransaction(tx)
+    const signature: string = sigRes?.signature || sigRes
+    if (!signature) throw new Error('No transaction signature returned by wallet')
+
+    await conn.confirmTransaction({ signature, ...(await conn.getLatestBlockhash()) }, 'confirmed')
+    setLastSig(signature); setLastSigState(signature)
+  }
+
+  /** Path B: SPL Test Token transfer on devnet (or your chosen cluster) */
+  async function payWithToken() {
+    if (!TEST_TOKEN_MINT) throw new Error('Test token mint not configured.')
+    const provider = getProvider()
+    if (!provider) throw new Error('No Solana wallet detected.')
+
+    const res = await provider.connect?.()
+    const fromBase58: string =
+      res?.publicKey?.toBase58?.() ||
+      res?.publicKey ||
+      provider?.publicKey?.toBase58?.() ||
+      provider?.publicKey?.toString?.()
+    if (!fromBase58) throw new Error('Could not read wallet public key')
+
+    const fromPk = new PublicKey(fromBase58)
+    const mint = new PublicKey(TEST_TOKEN_MINT)
+    const toOwner = new PublicKey(TREASURY)
+    const amount = TEST_TOKEN_AMOUNT // e.g., 5 * 10^decimals
+
+    const conn = new Connection(clusterApiUrl(CLUSTER), 'confirmed')
+    const spl = await getSpl()
+
+    // Resolve (create if needed) ATAs
+    const fromAta = await spl.getAssociatedTokenAddress(mint, fromPk, false, spl.TOKEN_PROGRAM_ID, spl.ASSOCIATED_TOKEN_PROGRAM_ID)
+    const toAta   = await spl.getAssociatedTokenAddress(mint, toOwner, false, spl.TOKEN_PROGRAM_ID, spl.ASSOCIATED_TOKEN_PROGRAM_ID)
+
+    const ixes: any[] = []
+
+    // Create ATAs if they don't exist
+    const fromAtaInfo = await conn.getAccountInfo(fromAta)
+    if (!fromAtaInfo) {
+      ixes.push(spl.createAssociatedTokenAccountInstruction(fromPk, fromAta, fromPk, mint, spl.TOKEN_PROGRAM_ID, spl.ASSOCIATED_TOKEN_PROGRAM_ID))
+    }
+    const toAtaInfo = await conn.getAccountInfo(toAta)
+    if (!toAtaInfo) {
+      ixes.push(spl.createAssociatedTokenAccountInstruction(fromPk, toAta, toOwner, mint, spl.TOKEN_PROGRAM_ID, spl.ASSOCIATED_TOKEN_PROGRAM_ID))
+    }
+
+    // Transfer tokens
+    ixes.push(spl.createTransferInstruction(
+      fromAta,
+      toAta,
+      fromPk,
+      Number(amount), // spl-token uses number for non-2022 helpers; amount must fit in JS number if huge adjust code to 2022
+      [],
+      spl.TOKEN_PROGRAM_ID
+    ))
+
+    const tx = new Transaction().add(...ixes)
+    tx.feePayer = fromPk
+    tx.recentBlockhash = (await conn.getLatestBlockhash('finalized')).blockhash
+
+    const sigRes = await provider.signAndSendTransaction(tx)
+    const signature: string = sigRes?.signature || sigRes
+    if (!signature) throw new Error('No transaction signature returned by wallet')
+
+    await conn.confirmTransaction({ signature, ...(await conn.getLatestBlockhash()) }, 'confirmed')
+    setLastSig(signature); setLastSigState(signature)
   }
 
   const explorerUrl = lastSig
@@ -188,13 +258,20 @@ export default function ContestTypes({ onBack, onJoined }: Props) {
           <div style={{width:36}} />
         </div>
 
-        {/* Intro / wallet status */}
+        {/* Intro / wallet status + payment method */}
         <div className="ct-card ct-head">
           <div className="ct-row">
             <div className="ct-pill">${ENTRY_USD} entry</div>
             <div className="ct-pill">Prize Leaderboards</div>
             <div className={`ct-pill ${walletConnected ? 'is-ok' : 'is-warn'}`}>
               {walletConnected ? 'Wallet connected' : 'Connect wallet to join'}
+            </div>
+            <div className="pay-method">
+              <label>Pay with:</label>
+              <select value={payWith} onChange={e => setPayWith(e.target.value as any)}>
+                <option value="SOL">SOL ({CLUSTER})</option>
+                {tokenEnabled && <option value="TOKEN">Test Token</option>}
+              </select>
             </div>
           </div>
           {explorerUrl && (
@@ -216,8 +293,8 @@ export default function ContestTypes({ onBack, onJoined }: Props) {
                 </div>
               </div>
               <p className="ct-item-desc">{c.desc}</p>
-              <button className="ct-join" onClick={c.onJoin} disabled={!walletConnected}>
-                Join for ${ENTRY_USD} in SOL
+              <button className="ct-join" onClick={() => openJoin(c.mode)} disabled={!walletConnected}>
+                {payWith === 'SOL' ? `Join for $${ENTRY_USD} in SOL` : `Join for ${Number(TEST_TOKEN_AMOUNT) / 10 ** TEST_TOKEN_DECIMALS} TEST`}
               </button>
             </div>
           ))}
@@ -232,17 +309,26 @@ export default function ContestTypes({ onBack, onJoined }: Props) {
             <div className="ct-modal-inner">
               <div className="ct-modal-title">Confirm entry</div>
               <div className="ct-modal-info">
-                You’re joining <strong>{modal.mode}</strong> contest. Entry fee:
-                <strong> ${ENTRY_USD} in SOL</strong>.
+                You’re joining <strong>{modal.mode}</strong> contest.
+                {payWith === 'SOL' ? (
+                  <> Entry fee: <strong>${ENTRY_USD} in SOL</strong>.</>
+                ) : (
+                  <> Entry fee: <strong>{Number(TEST_TOKEN_AMOUNT) / 10 ** TEST_TOKEN_DECIMALS} TEST</strong>.</>
+                )}
               </div>
+
               <div className="ct-modal-actions">
                 <button className="ct-ghost" onClick={() => setModal(null)} disabled={paying}>Cancel</button>
-                <button className={`ct-pay ${paying ? 'is-loading' : ''}`} onClick={payAndJoinReal} disabled={paying}>
+                <button className={`ct-pay ${paying ? 'is-loading' : ''}`} onClick={payAndJoin} disabled={paying}>
                   {paying ? 'Processing…' : 'Pay & Join'}
                 </button>
               </div>
+
               <div className="ct-receipt subtle">
                 Network: <b>{CLUSTER}</b> · Treasury: <b>{TREASURY.slice(0,4)}…{TREASURY.slice(-4)}</b>
+                {payWith === 'TOKEN' && TEST_TOKEN_MINT && (
+                  <> · Mint: <b>{TEST_TOKEN_MINT.slice(0,4)}…{TEST_TOKEN_MINT.slice(-4)}</b></>
+                )}
               </div>
             </div>
           </div>
@@ -271,15 +357,20 @@ function Style() {
         border-radius:16px; padding:16px; backdrop-filter: blur(8px);
       }
       .ct-head { margin-bottom: 12px; }
-      .ct-row { display:flex; gap:8px; flex-wrap: wrap; }
+      .ct-row { display:flex; gap:8px; flex-wrap: wrap; align-items:center; }
       .ct-pill {
         border:1px solid rgba(255,255,255,0.18);
         background: linear-gradient(135deg, rgba(255,255,255,0.10), rgba(255,255,255,0.05));
-        border-radius: 999px;
-        padding:6px 10px; font-size:12px;
+        border-radius: 999px; padding:6px 10px; font-size:12px;
       }
       .ct-pill.is-ok { border-color: rgba(34,197,94,0.6); }
       .ct-pill.is-warn { border-color: rgba(234,179,8,0.6); }
+
+      .pay-method { display:flex; align-items:center; gap:6px; margin-left:auto; }
+      .pay-method select {
+        height:28px; border-radius:8px; border:1px solid rgba(255,255,255,0.2);
+        background: rgba(255,255,255,0.06); color:#fff; padding: 0 8px;
+      }
 
       .ct-grid { display:grid; gap:12px; grid-template-columns: 1fr; }
       @media (min-width: 720px) { .ct-grid { grid-template-columns: 1fr 1fr 1fr; } }
