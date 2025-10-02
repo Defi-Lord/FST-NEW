@@ -19,7 +19,7 @@ type Props = {
 const CLUSTER: 'devnet' | 'mainnet-beta' | 'testnet' = 'devnet'
 
 /** Your treasury (recipient) wallet */
-const TREASURY = 'YOUR_TREASURY_WALLET_ADDRESS' // <-- set this
+const TREASURY = 'YOUR_TREASURY_WALLET_ADDRESS' // ⬅️ set this
 
 /** Entry price in USD (for SOL path). For test token path, we send a fixed "5 units" by default. */
 const ENTRY_USD = 5
@@ -66,17 +66,12 @@ function getProvider(): any | null {
   return null
 }
 
-/** Lazy import SPL-Token; if you haven’t installed it yet, we’ll pull from CDN. */
+/** ALWAYS load SPL-Token from CDN to avoid Vite prebundle errors. No npm install required. */
 async function getSpl() {
-  try {
-    const m = await import('@solana/spl-token')
-    return m
-  } catch {
-    const cdn = 'https://esm.sh/@solana/spl-token@0.4.7?bundle'
-    // @vite-ignore
-    const m = await import(cdn)
-    return m
-  }
+  const cdn = 'https://esm.sh/@solana/spl-token@0.4.7?bundle'
+  // @vite-ignore
+  const m = await import(cdn)
+  return m
 }
 
 /* ===================== Page ===================== */
@@ -200,7 +195,7 @@ export default function ContestTypes({ onBack, onJoined }: Props) {
     const amount = TEST_TOKEN_AMOUNT // e.g., 5 * 10^decimals
 
     const conn = new Connection(clusterApiUrl(CLUSTER), 'confirmed')
-    const spl = await getSpl()
+    const spl = await getSpl() // <- loaded from CDN, no npm required
 
     // Resolve (create if needed) ATAs
     const fromAta = await spl.getAssociatedTokenAddress(mint, fromPk, false, spl.TOKEN_PROGRAM_ID, spl.ASSOCIATED_TOKEN_PROGRAM_ID)
@@ -223,7 +218,7 @@ export default function ContestTypes({ onBack, onJoined }: Props) {
       fromAta,
       toAta,
       fromPk,
-      Number(amount), // spl-token uses number for non-2022 helpers; amount must fit in JS number if huge adjust code to 2022
+      Number(amount), // amount fits in JS number for 5*10^6; adjust if you later use larger amounts
       [],
       spl.TOKEN_PROGRAM_ID
     ))
@@ -294,7 +289,9 @@ export default function ContestTypes({ onBack, onJoined }: Props) {
               </div>
               <p className="ct-item-desc">{c.desc}</p>
               <button className="ct-join" onClick={() => openJoin(c.mode)} disabled={!walletConnected}>
-                {payWith === 'SOL' ? `Join for $${ENTRY_USD} in SOL` : `Join for ${Number(TEST_TOKEN_AMOUNT) / 10 ** TEST_TOKEN_DECIMALS} TEST`}
+                {payWith === 'SOL'
+                  ? `Join for $${ENTRY_USD} in SOL`
+                  : `Join for ${Number(TEST_TOKEN_AMOUNT) / 10 ** TEST_TOKEN_DECIMALS} TEST`}
               </button>
             </div>
           ))}
