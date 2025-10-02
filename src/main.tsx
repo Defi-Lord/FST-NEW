@@ -14,21 +14,25 @@ import Top10 from './pages_Top10'
 import Fixtures from './pages_Fixtures'
 import Stats from './pages_Stats'
 
-// NEW PAGES (hamburger menu)
+// Menu pages
 import HowToPlay from './pages_HowToPlay'
 import AboutUs from './pages_AboutUs'
 import ContactUs from './pages_ContactUs'
 
-// NEW: Connect wallet page
+// Wallet connect
 import ConnectWallet from './pages_ConnectWallet'
+
+// NEW: Contest Types page (weekly / monthly / seasonal)
+import ContestTypes from './pages_ContestTypes'
 
 // keep the drawer styles global
 import './styles/menu-drawer.css'
 
 type Route =
   | 'landing'
-  | 'connect'     // NEW
-  | 'contest'
+  | 'connect'       // after landing
+  | 'contest'       // your existing PL competitions screen
+  | 'contestTypes'  // NEW: the list of Weekly/Monthly/Seasonal
   | 'create'
   | 'leaderboard'
   | 'rewards'
@@ -37,7 +41,6 @@ type Route =
   | 'top10'
   | 'fixtures'
   | 'stats'
-  // menu pages
   | 'howToPlay'
   | 'about'
   | 'contact'
@@ -115,13 +118,13 @@ function App() {
             if (saved) {
               go('contest')   // already connected → skip connect page
             } else {
-              go('connect')   // first time → connect page
+              go('connect')   // first time → connect wallet
             }
           }}
         />
       )}
 
-      {/* NEW: Connect Wallet page (auto-skip logic also inside the page) */}
+      {/* Connect Wallet (auto-skip is handled inside this page too) */}
       {route === 'connect' && (
         <ConnectWallet
           onBack={back}
@@ -129,10 +132,24 @@ function App() {
         />
       )}
 
+      {/* Your existing PL page */}
       {route === 'contest' && (
         <JoinContest
           onSelect={() => go('create')}
           onBack={back}
+        />
+      )}
+
+      {/* NEW: Contest Types (Weekly / Monthly / Seasonal) */}
+      {route === 'contestTypes' && (
+        <ContestTypes
+          onBack={back}
+          onJoined={(mode) => {
+            // Save contest mode for downstream rules (CreateTeam, transfers)
+            try { localStorage.setItem('contest_mode', mode) } catch {}
+            // After paying/joining, take the user to your existing PL page
+            go('contest')
+          }}
         />
       )}
 
@@ -165,6 +182,8 @@ function App() {
           onHowToPlay={() => go('howToPlay')}
           onAboutUs={() => go('about')}
           onContactUs={() => go('contact')}
+          // NEW: open the new contest types page from the animated bar
+          onOpenContestTypes={() => go('contestTypes')}
         />
       )}
 
@@ -173,7 +192,6 @@ function App() {
       {route === 'fixtures' && <Fixtures onBack={back} />}
       {route === 'stats' && <Stats onBack={back} />}
 
-      {/* menu pages */}
       {route === 'howToPlay' && <HowToPlay onBack={back} />}
       {route === 'about' && <AboutUs onBack={back} />}
       {route === 'contact' && <ContactUs onBack={back} />}

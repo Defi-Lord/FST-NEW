@@ -4,6 +4,7 @@ import { useApp } from './state'
 import TopBar from './components_TopBar'
 import MenuDrawer from './components/menu-drawer'
 import { fetchFixtures, fetchBootstrap, fetchElementSummary } from './api'
+import JoinContestBar from './components_JoinContestBar' // ⬅️ NEW
 
 type Props = {
   onViewTeam?: () => void
@@ -18,6 +19,7 @@ type Props = {
   onHowToPlay?: () => void
   onAboutUs?: () => void
   onContactUs?: () => void
+  onOpenContestTypes?: () => void // ⬅️ NEW
 }
 
 type LbEntry = { name: string; points: number }
@@ -95,7 +97,7 @@ async function sumWeeklyPointsForTeam(playerIds: (string|number)[], round: numbe
 
 export default function HomeHub({
   onViewTeam, onCreateTeam, onJoinContest, onLeaderboard, onTransfers, onFixtures, onStats, onBack, onTop10,
-  onHowToPlay, onAboutUs, onContactUs
+  onHowToPlay, onAboutUs, onContactUs, onOpenContestTypes
 }: Props) {
   const { fullName, budget, team } = useApp()
   const picked = team.length
@@ -128,6 +130,7 @@ export default function HomeHub({
   const handleJoin       = onJoinContest ?? (() => alert('Join contest coming soon'))
   const handleLb         = onLeaderboard ?? (() => alert('Leaderboard coming soon'))
   const handleTop10      = onTop10 ?? (() => alert('Top 10 coming soon'))
+  const handleOpenTypes  = onOpenContestTypes ?? (() => alert('Contest types coming soon')) // ⬅️ NEW
 
   const goHowToPlay = onHowToPlay ?? (() => alert('How to Play'))
   const goAboutUs   = onAboutUs   ?? (() => alert('About Us'))
@@ -156,7 +159,7 @@ export default function HomeHub({
       try {
         setLoadingGW(true)
         const data = await fetchBootstrap()
-        const events: FplEvent[] = data?.events ?? []
+        const events = data?.events ?? []
         const { round: r, label } = resolveLatestFinishedRound(events)
         if (!mounted) return
         setRound(r); setRoundLabel(label)
@@ -205,6 +208,11 @@ export default function HomeHub({
         <div style={{margin:'6px 0 10px'}}>
           <div style={{fontWeight:900,fontSize:20,letterSpacing:.2}}>Welcome</div>
           <div className="subtle">{fullName}</div>
+        </div>
+
+        {/* 🔥 NEW: animated Join contest bar right under greeting */}
+        <div style={{ margin: '10px 0 14px' }}>
+          <JoinContestBar onClick={handleOpenTypes} />
         </div>
 
         {/* Squad status */}
