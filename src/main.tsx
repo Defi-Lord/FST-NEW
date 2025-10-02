@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { AppProvider } from './state'
 
 import Landing from './pages_Landing'
+import ConnectWallet from './pages_ConnectWallet'   // ⬅️ connect page
 import JoinContest from './pages_JoinContest'
 import CreateTeam from './pages_CreateTeam'
 import Leaderboard from './pages_Leaderboard'
@@ -14,25 +15,18 @@ import Top10 from './pages_Top10'
 import Fixtures from './pages_Fixtures'
 import Stats from './pages_Stats'
 
-// Menu pages
+// NEW PAGES (hamburger menu)
 import HowToPlay from './pages_HowToPlay'
 import AboutUs from './pages_AboutUs'
 import ContactUs from './pages_ContactUs'
-
-// Wallet connect
-import ConnectWallet from './pages_ConnectWallet'
-
-// NEW: Contest Types page (weekly / monthly / seasonal)
-import ContestTypes from './pages_ContestTypes'
 
 // keep the drawer styles global
 import './styles/menu-drawer.css'
 
 type Route =
   | 'landing'
-  | 'connect'       // after landing
-  | 'contest'       // your existing PL competitions screen
-  | 'contestTypes'  // NEW: the list of Weekly/Monthly/Seasonal
+  | 'connect'     // ⬅️ inserted route
+  | 'contest'
   | 'create'
   | 'leaderboard'
   | 'rewards'
@@ -104,52 +98,34 @@ function App() {
     }
   }
 
-  const getSavedWallet = () => {
-    try { return localStorage.getItem('sol_wallet') } catch { return null }
+  // When wallet connects, jump to Join Contest
+  const handleConnected = (addr: string) => {
+    try { localStorage.setItem('sol_wallet', addr) } catch {}
+    go('contest')
   }
 
   return (
     <>
-      {/* Landing → if wallet saved, skip to contest; else go connect */}
+      {/* Landing → Connect */}
       {route === 'landing' && (
         <Landing
-          onLaunch={() => {
-            const saved = getSavedWallet()
-            if (saved) {
-              go('contest')   // already connected → skip connect page
-            } else {
-              go('connect')   // first time → connect wallet
-            }
-          }}
+          onLaunch={() => go('connect')}          // ⬅️ go to connect page first
         />
       )}
 
-      {/* Connect Wallet (auto-skip is handled inside this page too) */}
+      {/* Connect Wallet → on success go('contest') */}
       {route === 'connect' && (
         <ConnectWallet
           onBack={back}
-          onConnected={() => go('contest')}
+          onConnected={handleConnected}           // ⬅️ store & continue
         />
       )}
 
-      {/* Your existing PL page */}
+      {/* Join Contest */}
       {route === 'contest' && (
         <JoinContest
           onSelect={() => go('create')}
           onBack={back}
-        />
-      )}
-
-      {/* NEW: Contest Types (Weekly / Monthly / Seasonal) */}
-      {route === 'contestTypes' && (
-        <ContestTypes
-          onBack={back}
-          onJoined={(mode) => {
-            // Save contest mode for downstream rules (CreateTeam, transfers)
-            try { localStorage.setItem('contest_mode', mode) } catch {}
-            // After paying/joining, take the user to your existing PL page
-            go('contest')
-          }}
         />
       )}
 
@@ -182,8 +158,6 @@ function App() {
           onHowToPlay={() => go('howToPlay')}
           onAboutUs={() => go('about')}
           onContactUs={() => go('contact')}
-          // NEW: open the new contest types page from the animated bar
-          onOpenContestTypes={() => go('contestTypes')}
         />
       )}
 
@@ -192,6 +166,7 @@ function App() {
       {route === 'fixtures' && <Fixtures onBack={back} />}
       {route === 'stats' && <Stats onBack={back} />}
 
+      {/* NEW pages rendered by the menu */}
       {route === 'howToPlay' && <HowToPlay onBack={back} />}
       {route === 'about' && <AboutUs onBack={back} />}
       {route === 'contact' && <ContactUs onBack={back} />}
