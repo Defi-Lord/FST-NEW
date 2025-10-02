@@ -53,7 +53,7 @@ type FplElement = {
   team: number
   now_cost: number
   element_type: number
-  form: string
+  form?: string
 }
 type FplTeam = { id: number; name: string }
 const mapTypeToPosition = (t: number): Position =>
@@ -94,7 +94,7 @@ export default function TeamSelection({
           position: mapTypeToPosition(e.element_type),
           price: Number((e.now_cost || 0) / 10),
           form: Number(parseFloat(e.form || '0')),
-        }))
+        })) as unknown as Player[] // satisfy Player type from state
         if (!mounted) return
         setAll(mapped)
       } catch (e: any) {
@@ -122,7 +122,12 @@ export default function TeamSelection({
       const inPos = p.position.toLowerCase().includes(qLower)
       return inName || inClub || inPos
     })
-    return list.slice().sort((a, b) => (b.form - a.form) || (b.price - a.price))
+    return list.slice().sort((a, b) => {
+      const fb = (b as any).form ?? 0
+      const fa = (a as any).form ?? 0
+      if (fb !== fa) return fb - fa
+      return (b.price as number) - (a.price as number)
+    })
   }, [all, pos, qLower])
 
   function canAdd(p: Player): string | null {
@@ -130,18 +135,19 @@ export default function TeamSelection({
     if (picked >= TOTAL_SQUAD) return `Squad full (${TOTAL_SQUAD}).`
     if ((posCounts[p.position] || 0) >= LIMITS[p.position]) return `Max ${LIMITS[p.position]} ${p.position}.`
     if ((clubCounts[p.club] || 0) >= CLUB_CAP) return `Max ${CLUB_CAP} per club.`
-    if (budget < p.price) return 'Insufficient budget.'
+    if (budget < (p.price as number)) return 'Insufficient budget.'
     return null
   }
 
   function toggle(p: Player) {
     if (team.find(t => t.id === p.id)) {
-      removePlayer(p)
+      // FIX: hook expects id (string|number)
+      removePlayer(p.id as any)
       return
     }
-    const err = canAdd(p)
-    if (err) { alert(err); return }
-    addPlayer(p)
+    const msg = canAdd(p)
+    if (msg) { alert(msg); return }
+    addPlayer(p as any)
   }
 
   return (
@@ -156,7 +162,7 @@ export default function TeamSelection({
               <span className="chip chip-ok">Entry confirmed ✓</span>
               <span className="chip">{mode.toUpperCase()}</span>
               <span className="chip">{transferPolicy.label}</span>
-              <span className="chip">Budget {formatMoney(budget)}</span>
+              <span className="chip">Budget {formatMoney(budget as number)}</span>
             </div>
           }
         />
@@ -206,7 +212,7 @@ export default function TeamSelection({
                   </div>
 
                   <div className="right">
-                    <div className="price">{formatMoney(p.price)}</div>
+                    <div className="price">{formatMoney(p.price as number)}</div>
                     <button
                       className={`btn ${already ? 'btn-remove' : 'btn-add'}`}
                       onClick={() => toggle(p)}
@@ -245,8 +251,8 @@ export default function TeamSelection({
                   </div>
                 </div>
                 <div style={{ marginLeft:'auto', display:'flex', gap: 6, alignItems:'center' }}>
-                  <span style={{ fontSize:'var(--fs-sm)' }}>{formatMoney(p.price)}</span>
-                  <button className="btn-remove" onClick={() => removePlayer(p)}>Remove</button>
+                  <span style={{ fontSize:'var(--fs-sm)' }}>{formatMoney(p.price as number)}</span>
+                  <button className="btn-remove" onClick={() => removePlayer(p.id as any)}>Remove</button>
                 </div>
               </li>
             ))}
@@ -254,7 +260,7 @@ export default function TeamSelection({
 
           <div className="row" style={{ marginTop: 6, fontSize:'var(--fs-md)' }}>
             <strong>Remaining:</strong>
-            <strong>{formatMoney(budget)}</strong>
+            <strong>{formatMoney(budget as number)}</strong>
           </div>
         </div>
 

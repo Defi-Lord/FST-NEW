@@ -158,7 +158,9 @@ function App() {
       {route === 'joinContest' && <JoinContest onSelect={() => go('create')} onBack={back} />}
       {route === 'create' && <CreateTeam onNext={() => go('leaderboard')} onBack={back} />}
       {route === 'leaderboard' && <Leaderboard onNext={() => go('rewards')} onBack={back} />}
-      {route === 'rewards' && <Rewards onBack={back} onEnterApp={() => go('home')} />}
+
+      {/* FIX: Rewards only accepts onClaim */}
+      {route === 'rewards' && <Rewards onClaim={() => go('home')} />}
 
       {route === 'viewteam' && <ViewTeam onBack={back} />}
       {route === 'top10' && <Top10 onBack={back} />}
