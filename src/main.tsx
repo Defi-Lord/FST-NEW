@@ -6,8 +6,8 @@ import { AppProvider } from './state'
 import Landing from './pages_Landing'
 import ConnectWallet from './pages_ConnectWallet'
 import HomeHub from './pages_HomeHub'
-import ContestTypes from './pages_ContestTypes'    // ⬅️ NEW flow entry for payments
-import TeamSelection from './pages_TeamSelection'  // ⬅️ NEW post-payment builder
+import ContestTypes from './pages_ContestTypes'
+import TeamSelection from './pages_TeamSelection'
 
 // Existing pages
 import JoinContest from './pages_JoinContest'
@@ -31,8 +31,8 @@ type Route =
   | 'landing'
   | 'connect'
   | 'home'
-  | 'contestTypes'   // ⬅️ NEW
-  | 'teamSelect'     // ⬅️ NEW (post-payment create)
+  | 'contestTypes'
+  | 'teamSelect'
   | 'joinContest'
   | 'create'
   | 'leaderboard'
@@ -118,17 +118,12 @@ function App() {
     <>
       {/* Landing: if wallet already connected, skip Connect → go Home */}
       {route === 'landing' && (
-        <Landing
-          onLaunch={() => go(hasWallet() ? 'home' : 'connect')}
-        />
+        <Landing onLaunch={() => go(hasWallet() ? 'home' : 'connect')} />
       )}
 
       {/* Connect Wallet */}
       {route === 'connect' && (
-        <ConnectWallet
-          onBack={back}
-          onConnected={handleConnected}
-        />
+        <ConnectWallet onBack={back} onConnected={handleConnected} />
       )}
 
       {/* Home hub */}
@@ -136,7 +131,7 @@ function App() {
         <HomeHub
           onViewTeam={() => go('viewteam')}
           onCreateTeam={() => go('create')}
-          onJoinContest={() => go('contestTypes')}     {/* ⬅️ goes to payment/contest types */}
+          onJoinContest={() => go('contestTypes')}
           onLeaderboard={() => go('leaderboard')}
           onTop10={() => go('top10')}
           onTransfers={() => alert('Transfers coming soon')}
@@ -151,21 +146,15 @@ function App() {
 
       {/* Contest Types (payment) */}
       {route === 'contestTypes' && (
-        <ContestTypes
-          onBack={back}
-          onJoined={() => go('teamSelect')}          // ⬅️ after $5 paid, go build team
-        />
+        <ContestTypes onBack={back} onJoined={() => go('teamSelect')} />
       )}
 
       {/* Post-payment squad builder */}
       {route === 'teamSelect' && (
-        <TeamSelection
-          onBack={back}
-          onNext={() => go('leaderboard')}
-        />
+        <TeamSelection onBack={back} onNext={() => go('leaderboard')} />
       )}
 
-      {/* (Optional) Legacy routes if you still use them elsewhere */}
+      {/* Optional legacy routes */}
       {route === 'joinContest' && <JoinContest onSelect={() => go('create')} onBack={back} />}
       {route === 'create' && <CreateTeam onNext={() => go('leaderboard')} onBack={back} />}
       {route === 'leaderboard' && <Leaderboard onNext={() => go('rewards')} onBack={back} />}
