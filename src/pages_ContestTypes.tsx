@@ -18,8 +18,8 @@ type Props = {
 /** Use 'devnet' while testing; switch to 'mainnet-beta' when live */
 const CLUSTER: 'devnet' | 'mainnet-beta' | 'testnet' = 'devnet'
 
-/** Your treasury (recipient) wallet */
-const TREASURY = 'YOUR_TREASURY_WALLET_ADDRESS' // ⬅️ set this
+/** Your treasury (recipient) wallet — set this to a real address */
+const TREASURY: string = 'YOUR_TREASURY_WALLET_ADDRESS' // ⬅️ set this
 
 /** Entry price in USD (for SOL path). For test token path, we send a fixed "5 units" by default. */
 const ENTRY_USD = 5
@@ -31,7 +31,7 @@ const SOL_PRICE_FALLBACK = 150
  *  If you provide a mint, the page will offer a "Test Token" option.
  *  Example: create your own mint on devnet and put the address here.
  */
-const TEST_TOKEN_MINT = '' // e.g. '9xyz...MintAddressOnDevnet' (leave empty to hide token option)
+const TEST_TOKEN_MINT: string = '' // e.g. '9xyz...MintAddressOnDevnet' (leave empty to hide token option)
 const TEST_TOKEN_DECIMALS = 6 // USDC-like; adjust to your mint
 /** Amount of test token to send for entry.
  *  If you want it to represent $5 exactly with a 6-decimal token, use 5 * 10^6 = 5_000_000
@@ -74,6 +74,14 @@ async function getSpl() {
   return m
 }
 
+/** Safe short mask for addresses in UI */
+function maskAddr(addr: string | null | undefined): string {
+  if (!addr) return '—'
+  const s = String(addr)
+  if (s.length <= 8) return s
+  return `${s.slice(0,4)}…${s.slice(-4)}`
+}
+
 /* ===================== Page ===================== */
 export default function ContestTypes({ onBack, onJoined }: Props) {
   const walletConnected = hasWallet()
@@ -83,7 +91,7 @@ export default function ContestTypes({ onBack, onJoined }: Props) {
   const [lastSig, setLastSigState] = useState<string | null>(getLastSig())
   const [payWith, setPayWith] = useState<'SOL'|'TOKEN'>(() => (TEST_TOKEN_MINT ? 'TOKEN' : 'SOL'))
 
-  const tokenEnabled = Boolean(TEST_TOKEN_MINT)
+  const tokenEnabled = Boolean(TEST_TOKEN_MINT && TEST_TOKEN_MINT.length > 0)
 
   const cards = useMemo(() => ([
     {
@@ -177,7 +185,7 @@ export default function ContestTypes({ onBack, onJoined }: Props) {
 
   /** Path B: SPL Test Token transfer on devnet (or your chosen cluster) */
   async function payWithToken() {
-    if (!TEST_TOKEN_MINT) throw new Error('Test token mint not configured.')
+    if (!tokenEnabled) throw new Error('Test token mint not configured.')
     const provider = getProvider()
     if (!provider) throw new Error('No Solana wallet detected.')
 
@@ -218,7 +226,7 @@ export default function ContestTypes({ onBack, onJoined }: Props) {
       fromAta,
       toAta,
       fromPk,
-      Number(amount), // amount fits in JS number for 5*10^6; adjust if you later use larger amounts
+      Number(amount), // with 6 decimals, 5*10^6 fits safely in JS number
       [],
       spl.TOKEN_PROGRAM_ID
     ))
@@ -322,9 +330,9 @@ export default function ContestTypes({ onBack, onJoined }: Props) {
               </div>
 
               <div className="ct-receipt subtle">
-                Network: <b>{CLUSTER}</b> · Treasury: <b>{TREASURY.slice(0,4)}…{TREASURY.slice(-4)}</b>
-                {payWith === 'TOKEN' && TEST_TOKEN_MINT && (
-                  <> · Mint: <b>{TEST_TOKEN_MINT.slice(0,4)}…{TEST_TOKEN_MINT.slice(-4)}</b></>
+                Network: <b>{CLUSTER}</b> · Treasury: <b>{maskAddr(TREASURY)}</b>
+                {payWith === 'TOKEN' && tokenEnabled && (
+                  <> · Mint: <b>{maskAddr(TEST_TOKEN_MINT)}</b></>
                 )}
               </div>
             </div>
