@@ -4,7 +4,7 @@ import { useApp } from './state'
 import TopBar from './components_TopBar'
 import MenuDrawer from './components/menu-drawer'
 import { fetchFixtures, fetchBootstrap, fetchElementSummary } from './api'
-import JoinContestBar from './components_JoinContestBar' // ⬅️ NEW
+import JoinContestBar from './components_JoinContestBar' // animated CTA
 
 type Props = {
   onViewTeam?: () => void
@@ -19,7 +19,6 @@ type Props = {
   onHowToPlay?: () => void
   onAboutUs?: () => void
   onContactUs?: () => void
-  onOpenContestTypes?: () => void // ⬅️ NEW
 }
 
 type LbEntry = { name: string; points: number }
@@ -97,7 +96,7 @@ async function sumWeeklyPointsForTeam(playerIds: (string|number)[], round: numbe
 
 export default function HomeHub({
   onViewTeam, onCreateTeam, onJoinContest, onLeaderboard, onTransfers, onFixtures, onStats, onBack, onTop10,
-  onHowToPlay, onAboutUs, onContactUs, onOpenContestTypes
+  onHowToPlay, onAboutUs, onContactUs
 }: Props) {
   const { fullName, budget, team } = useApp()
   const picked = team.length
@@ -127,10 +126,9 @@ export default function HomeHub({
   const handleTransfers  = onTransfers ?? (() => alert('Transfers coming soon'))
   const handleFixtures   = onFixtures ?? (() => alert('Fixtures coming soon'))
   const handleStats      = onStats ?? (() => alert('Stats coming soon'))
-  const handleJoin       = onJoinContest ?? (() => alert('Join contest coming soon'))
+  const handleJoin       = onJoinContest ?? (() => alert('Join contest coming soon')) // unified handler
   const handleLb         = onLeaderboard ?? (() => alert('Leaderboard coming soon'))
   const handleTop10      = onTop10 ?? (() => alert('Top 10 coming soon'))
-  const handleOpenTypes  = onOpenContestTypes ?? (() => alert('Contest types coming soon')) // ⬅️ NEW
 
   const goHowToPlay = onHowToPlay ?? (() => alert('How to Play'))
   const goAboutUs   = onAboutUs   ?? (() => alert('About Us'))
@@ -210,9 +208,9 @@ export default function HomeHub({
           <div className="subtle">{fullName}</div>
         </div>
 
-        {/* 🔥 NEW: animated Join contest bar right under greeting */}
+        {/* 🔥 Animated JOIN CONTEST bar */}
         <div style={{ margin: '10px 0 14px' }}>
-          <JoinContestBar onClick={handleOpenTypes} />
+          <JoinContestBar onClick={handleJoin} />
         </div>
 
         {/* Squad status */}
@@ -370,3 +368,5 @@ export default function HomeHub({
     </div>
   )
 }
+
+/* ======= styles (same as before) ======= */
