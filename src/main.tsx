@@ -4,18 +4,22 @@ import { createRoot } from 'react-dom/client'
 import { AppProvider } from './state'
 
 import Landing from './pages_Landing'
-import ConnectWallet from './pages_ConnectWallet'   // ⬅️ connect page
+import ConnectWallet from './pages_ConnectWallet'
+import HomeHub from './pages_HomeHub'
+import ContestTypes from './pages_ContestTypes'    // ⬅️ NEW flow entry for payments
+import TeamSelection from './pages_TeamSelection'  // ⬅️ NEW post-payment builder
+
+// Existing pages
 import JoinContest from './pages_JoinContest'
 import CreateTeam from './pages_CreateTeam'
 import Leaderboard from './pages_Leaderboard'
 import Rewards from './pages_Rewards'
-import HomeHub from './pages_HomeHub'
 import ViewTeam from './pages_ViewTeam'
 import Top10 from './pages_Top10'
 import Fixtures from './pages_Fixtures'
 import Stats from './pages_Stats'
 
-// NEW PAGES (hamburger menu)
+// Hamburger menu pages
 import HowToPlay from './pages_HowToPlay'
 import AboutUs from './pages_AboutUs'
 import ContactUs from './pages_ContactUs'
@@ -25,12 +29,14 @@ import './styles/menu-drawer.css'
 
 type Route =
   | 'landing'
-  | 'connect'     // ⬅️ inserted route
-  | 'contest'
+  | 'connect'
+  | 'home'
+  | 'contestTypes'   // ⬅️ NEW
+  | 'teamSelect'     // ⬅️ NEW (post-payment create)
+  | 'joinContest'
   | 'create'
   | 'leaderboard'
   | 'rewards'
-  | 'home'
   | 'viewteam'
   | 'top10'
   | 'fixtures'
@@ -38,6 +44,10 @@ type Route =
   | 'howToPlay'
   | 'about'
   | 'contact'
+
+const hasWallet = () => {
+  try { return !!localStorage.getItem('sol_wallet') } catch { return false }
+}
 
 function App() {
   const [route, setRoute] = useState<Route>('landing')
@@ -98,75 +108,75 @@ function App() {
     }
   }
 
-  // When wallet connects, jump to Join Contest
+  // When wallet connects, jump into contest flow
   const handleConnected = (addr: string) => {
     try { localStorage.setItem('sol_wallet', addr) } catch {}
-    go('contest')
+    go('contestTypes')
   }
 
   return (
     <>
-      {/* Landing → Connect */}
+      {/* Landing: if wallet already connected, skip Connect → go Home */}
       {route === 'landing' && (
         <Landing
-          onLaunch={() => go('connect')}          // ⬅️ go to connect page first
+          onLaunch={() => go(hasWallet() ? 'home' : 'connect')}
         />
       )}
 
-      {/* Connect Wallet → on success go('contest') */}
+      {/* Connect Wallet */}
       {route === 'connect' && (
         <ConnectWallet
           onBack={back}
-          onConnected={handleConnected}           // ⬅️ store & continue
+          onConnected={handleConnected}
         />
       )}
 
-      {/* Join Contest */}
-      {route === 'contest' && (
-        <JoinContest
-          onSelect={() => go('create')}
-          onBack={back}
-        />
-      )}
-
-      {route === 'create' && (
-        <CreateTeam
-          onNext={() => go('leaderboard')}
-          onBack={back}
-        />
-      )}
-
-      {route === 'leaderboard' && (
-        <Leaderboard
-          onNext={() => go('rewards')}
-          onBack={back}
-        />
-      )}
-
-      {route === 'rewards' && <Rewards onClaim={() => go('home')} />}
-
+      {/* Home hub */}
       {route === 'home' && (
         <HomeHub
           onViewTeam={() => go('viewteam')}
           onCreateTeam={() => go('create')}
-          onJoinContest={() => go('contest')}
+          onJoinContest={() => go('contestTypes')}     {/* ⬅️ goes to payment/contest types */}
           onLeaderboard={() => go('leaderboard')}
           onTop10={() => go('top10')}
           onTransfers={() => alert('Transfers coming soon')}
           onFixtures={() => go('fixtures')}
           onStats={() => go('stats')}
+          onBack={back}
           onHowToPlay={() => go('howToPlay')}
           onAboutUs={() => go('about')}
           onContactUs={() => go('contact')}
         />
       )}
 
+      {/* Contest Types (payment) */}
+      {route === 'contestTypes' && (
+        <ContestTypes
+          onBack={back}
+          onJoined={() => go('teamSelect')}          // ⬅️ after $5 paid, go build team
+        />
+      )}
+
+      {/* Post-payment squad builder */}
+      {route === 'teamSelect' && (
+        <TeamSelection
+          onBack={back}
+          onNext={() => go('leaderboard')}
+        />
+      )}
+
+      {/* (Optional) Legacy routes if you still use them elsewhere */}
+      {route === 'joinContest' && <JoinContest onSelect={() => go('create')} onBack={back} />}
+      {route === 'create' && <CreateTeam onNext={() => go('leaderboard')} onBack={back} />}
+      {route === 'leaderboard' && <Leaderboard onNext={() => go('rewards')} onBack={back} />}
+      {route === 'rewards' && <Rewards onBack={back} onEnterApp={() => go('home')} />}
+
       {route === 'viewteam' && <ViewTeam onBack={back} />}
       {route === 'top10' && <Top10 onBack={back} />}
       {route === 'fixtures' && <Fixtures onBack={back} />}
       {route === 'stats' && <Stats onBack={back} />}
 
-      {/* NEW pages rendered by the menu */}
+      {/* Menu pages */}
       {route === 'howToPlay' && <HowToPlay onBack={back} />}
       {route === 'about' && <AboutUs onBack={back} />}
       {route === 'contact' && <ContactUs onBack={back} />}
