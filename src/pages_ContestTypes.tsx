@@ -15,27 +15,19 @@ type Props = {
 }
 
 /* ===================== Config ===================== */
-/** Use 'devnet' while testing; switch to 'mainnet-beta' when live */
 const CLUSTER: 'devnet' | 'mainnet-beta' | 'testnet' = 'devnet'
 
-/** Your treasury (recipient) wallet — set this to a real address */
-const TREASURY: string = 'YOUR_TREASURY_WALLET_ADDRESS' // ⬅️ set this
+// ⬇️  IMPORTANT: paste a real wallet address here (base58). No spaces.
+const TREASURY: string = '8569mYKpddFZsAkQYRrNgNiDKoYYd87UbmmpwvjJiyt2'
 
-/** Entry price in USD (for SOL path). For test token path, we send a fixed "5 units" by default. */
+// $5 entry for SOL path; token path sends a fixed amount below
 const ENTRY_USD = 5
-
-/** Fallback SOL price (USD) if you haven’t wired a live price yet. */
 const SOL_PRICE_FALLBACK = 150
 
-/** OPTIONAL: Devnet Test Token (SPL) settings.
- *  If you provide a mint, the page will offer a "Test Token" option.
- *  Example: create your own mint on devnet and put the address here.
- */
-const TEST_TOKEN_MINT: string = '' // e.g. '9xyz...MintAddressOnDevnet' (leave empty to hide token option)
-const TEST_TOKEN_DECIMALS = 6 // USDC-like; adjust to your mint
-/** Amount of test token to send for entry.
- *  If you want it to represent $5 exactly with a 6-decimal token, use 5 * 10^6 = 5_000_000
- */
+// OPTIONAL: set a devnet mint to enable the Test Token option.
+// Leave empty ("") if you don't have a mint yet.
+const TEST_TOKEN_MINT: string = ''      // e.g. "9xY…MintAddress"
+const TEST_TOKEN_DECIMALS = 6
 const TEST_TOKEN_AMOUNT = 5n * BigInt(10 ** TEST_TOKEN_DECIMALS)
 
 /* ===================== Helpers ===================== */
@@ -44,7 +36,6 @@ const setContestMode = (mode: 'weekly'|'monthly'|'seasonal') => { try { localSto
 const setLastSig = (sig: string) => { try { localStorage.setItem('last_entry_sig', sig) } catch {} }
 const getLastSig = () => { try { return localStorage.getItem('last_entry_sig') } catch { return null } }
 
-/** Read a SOL/USD price (override via: localStorage.setItem('sol_usd','136.42')) */
 const getSolUsd = (): number => {
   try { const v = localStorage.getItem('sol_usd'); const n = v ? parseFloat(v) : NaN; return Number.isFinite(n)&&n>0 ? n : SOL_PRICE_FALLBACK } catch { return SOL_PRICE_FALLBACK }
 }
@@ -55,7 +46,6 @@ function lamportsFromUsd(usd: number, solUsdPrice: number): number {
   return Math.round(sol * LAMPORTS_PER_SOL)
 }
 
-/** Get injected Solana provider (Phantom/Backpack/Solflare/Exodus) */
 function getProvider(): any | null {
   const w: any = typeof window !== 'undefined' ? window : {}
   if (w.solana?.isPhantom) return w.solana
@@ -66,7 +56,7 @@ function getProvider(): any | null {
   return null
 }
 
-/** ALWAYS load SPL-Token from CDN to avoid Vite prebundle errors. No npm install required. */
+/** ALWAYS load SPL-Token from CDN so no npm install is required. */
 async function getSpl() {
   const cdn = 'https://esm.sh/@solana/spl-token@0.4.7?bundle'
   // @vite-ignore
@@ -82,6 +72,19 @@ function maskAddr(addr: string | null | undefined): string {
   return `${s.slice(0,4)}…${s.slice(-4)}`
 }
 
+/** Validate a base58 address early to avoid "Non-base58 character" errors */
+function assertValidAddress(name: string, addr: string) {
+  const trimmed = (addr || '').trim()
+  try {
+    // this throws if invalid
+    // also catches invisible characters, spaces, etc.
+    new PublicKey(trimmed)
+  } catch {
+    throw new Error(`${name} address is invalid. Please paste a valid base58 Solana address.`)
+  }
+  return trimmed
+}
+
 /* ===================== Page ===================== */
 export default function ContestTypes({ onBack, onJoined }: Props) {
   const walletConnected = hasWallet()
@@ -94,30 +97,15 @@ export default function ContestTypes({ onBack, onJoined }: Props) {
   const tokenEnabled = Boolean(TEST_TOKEN_MINT && TEST_TOKEN_MINT.length > 0)
 
   const cards = useMemo(() => ([
-    {
-      mode: 'weekly' as const,
-      title: 'Weekly Contest',
-      badge: '11 players · no transfers',
+    { mode: 'weekly' as const,   title: 'Weekly Contest',  badge: '11 players · no transfers',
       desc: 'Pick 11 within £100m. Locked for one weekend. FPL scoring. Closes at first kickoff.',
-      accent: 'rgba(99,102,241,0.35)',
-      onJoin: () => openJoin('weekly'),
-    },
-    {
-      mode: 'monthly' as const,
-      title: 'Monthly Contest',
-      badge: '13 players · 1 transfer/week',
+      accent: 'rgba(99,102,241,0.35)', onJoin: () => openJoin('weekly') },
+    { mode: 'monthly' as const,  title: 'Monthly Contest', badge: '13 players · 1 transfer/week',
       desc: 'Runs for 4–5 gameweeks. One transfer each week. Budget adjusts when you sell/buy.',
-      accent: 'rgba(34,197,94,0.35)',
-      onJoin: () => openJoin('monthly'),
-    },
-    {
-      mode: 'seasonal' as const,
-      title: 'Seasonal Contest',
-      badge: '15 players · 1 transfer per GW',
+      accent: 'rgba(34,197,94,0.35)', onJoin: () => openJoin('monthly') },
+    { mode: 'seasonal' as const, title: 'Seasonal Contest',badge: '15 players · 1 transfer per GW',
       desc: 'Full-season challenge. One transfer each gameweek. Cumulative leaderboard.',
-      accent: 'rgba(236,72,153,0.35)',
-      onJoin: () => openJoin('seasonal'),
-    },
+      accent: 'rgba(236,72,153,0.35)', onJoin: () => openJoin('seasonal') },
   ]), [])
 
   function openJoin(mode: 'weekly'|'monthly'|'seasonal') {
@@ -145,7 +133,7 @@ export default function ContestTypes({ onBack, onJoined }: Props) {
     }
   }
 
-  /** Path A: real SOL transfer (devnet by default) */
+  /** Path A: real SOL transfer */
   async function payWithSol() {
     const provider = getProvider()
     if (!provider) throw new Error('No Solana wallet detected.')
@@ -158,8 +146,9 @@ export default function ContestTypes({ onBack, onJoined }: Props) {
       provider?.publicKey?.toString?.()
     if (!fromBase58) throw new Error('Could not read wallet public key')
 
-    const fromPk = new PublicKey(fromBase58)
-    const toPk = new PublicKey(TREASURY)
+    // ✅ validate addresses early
+    const fromPk = new PublicKey(assertValidAddress('Sender', fromBase58))
+    const toPk   = new PublicKey(assertValidAddress('Treasury', TREASURY))
 
     const price = getSolUsd()
     const lamports = lamportsFromUsd(ENTRY_USD, price)
@@ -183,7 +172,7 @@ export default function ContestTypes({ onBack, onJoined }: Props) {
     setLastSig(signature); setLastSigState(signature)
   }
 
-  /** Path B: SPL Test Token transfer on devnet (or your chosen cluster) */
+  /** Path B: SPL Test Token transfer (only if TEST_TOKEN_MINT is set) */
   async function payWithToken() {
     if (!tokenEnabled) throw new Error('Test token mint not configured.')
     const provider = getProvider()
@@ -197,38 +186,28 @@ export default function ContestTypes({ onBack, onJoined }: Props) {
       provider?.publicKey?.toString?.()
     if (!fromBase58) throw new Error('Could not read wallet public key')
 
-    const fromPk = new PublicKey(fromBase58)
-    const mint = new PublicKey(TEST_TOKEN_MINT)
-    const toOwner = new PublicKey(TREASURY)
-    const amount = TEST_TOKEN_AMOUNT // e.g., 5 * 10^decimals
+    const fromPk  = new PublicKey(assertValidAddress('Sender', fromBase58))
+    const mintPk  = new PublicKey(assertValidAddress('Token mint', TEST_TOKEN_MINT))
+    const toOwner = new PublicKey(assertValidAddress('Treasury', TREASURY))
+    const amount  = TEST_TOKEN_AMOUNT // e.g., 5 * 10^decimals
 
     const conn = new Connection(clusterApiUrl(CLUSTER), 'confirmed')
-    const spl = await getSpl() // <- loaded from CDN, no npm required
+    const spl = await getSpl()
 
-    // Resolve (create if needed) ATAs
-    const fromAta = await spl.getAssociatedTokenAddress(mint, fromPk, false, spl.TOKEN_PROGRAM_ID, spl.ASSOCIATED_TOKEN_PROGRAM_ID)
-    const toAta   = await spl.getAssociatedTokenAddress(mint, toOwner, false, spl.TOKEN_PROGRAM_ID, spl.ASSOCIATED_TOKEN_PROGRAM_ID)
+    const fromAta = await spl.getAssociatedTokenAddress(mintPk, fromPk, false, spl.TOKEN_PROGRAM_ID, spl.ASSOCIATED_TOKEN_PROGRAM_ID)
+    const toAta   = await spl.getAssociatedTokenAddress(mintPk, toOwner, false, spl.TOKEN_PROGRAM_ID, spl.ASSOCIATED_TOKEN_PROGRAM_ID)
 
     const ixes: any[] = []
-
-    // Create ATAs if they don't exist
     const fromAtaInfo = await conn.getAccountInfo(fromAta)
     if (!fromAtaInfo) {
-      ixes.push(spl.createAssociatedTokenAccountInstruction(fromPk, fromAta, fromPk, mint, spl.TOKEN_PROGRAM_ID, spl.ASSOCIATED_TOKEN_PROGRAM_ID))
+      ixes.push(spl.createAssociatedTokenAccountInstruction(fromPk, fromAta, fromPk, mintPk, spl.TOKEN_PROGRAM_ID, spl.ASSOCIATED_TOKEN_PROGRAM_ID))
     }
     const toAtaInfo = await conn.getAccountInfo(toAta)
     if (!toAtaInfo) {
-      ixes.push(spl.createAssociatedTokenAccountInstruction(fromPk, toAta, toOwner, mint, spl.TOKEN_PROGRAM_ID, spl.ASSOCIATED_TOKEN_PROGRAM_ID))
+      ixes.push(spl.createAssociatedTokenAccountInstruction(fromPk, toAta, toOwner, mintPk, spl.TOKEN_PROGRAM_ID, spl.ASSOCIATED_TOKEN_PROGRAM_ID))
     }
-
-    // Transfer tokens
     ixes.push(spl.createTransferInstruction(
-      fromAta,
-      toAta,
-      fromPk,
-      Number(amount), // with 6 decimals, 5*10^6 fits safely in JS number
-      [],
-      spl.TOKEN_PROGRAM_ID
+      fromAta, toAta, fromPk, Number(amount), [], spl.TOKEN_PROGRAM_ID
     ))
 
     const tx = new Transaction().add(...ixes)
@@ -252,7 +231,6 @@ export default function ContestTypes({ onBack, onJoined }: Props) {
   return (
     <div className="screen">
       <Style />
-
       <div className="ctypes-wrap">
         {/* Top bar */}
         <div className="ctypes-top">
@@ -321,19 +299,15 @@ export default function ContestTypes({ onBack, onJoined }: Props) {
                   <> Entry fee: <strong>{Number(TEST_TOKEN_AMOUNT) / 10 ** TEST_TOKEN_DECIMALS} TEST</strong>.</>
                 )}
               </div>
-
               <div className="ct-modal-actions">
                 <button className="ct-ghost" onClick={() => setModal(null)} disabled={paying}>Cancel</button>
                 <button className={`ct-pay ${paying ? 'is-loading' : ''}`} onClick={payAndJoin} disabled={paying}>
                   {paying ? 'Processing…' : 'Pay & Join'}
                 </button>
               </div>
-
               <div className="ct-receipt subtle">
                 Network: <b>{CLUSTER}</b> · Treasury: <b>{maskAddr(TREASURY)}</b>
-                {payWith === 'TOKEN' && tokenEnabled && (
-                  <> · Mint: <b>{maskAddr(TEST_TOKEN_MINT)}</b></>
-                )}
+                {payWith === 'TOKEN' && tokenEnabled && (<> · Mint: <b>{maskAddr(TEST_TOKEN_MINT)}</b></>)}
               </div>
             </div>
           </div>
@@ -348,7 +322,6 @@ function Style() {
   return (
     <style>{`
       .ctypes-wrap { max-width: 960px; margin: 0 auto; padding: 14px; }
-
       .ctypes-top { display:flex; align-items:center; justify-content:space-between; margin-bottom: 10px; }
       .ct-back {
         width:36px; height:36px; border-radius:10px; border:1px solid rgba(255,255,255,0.16);
@@ -378,7 +351,7 @@ function Style() {
       }
 
       .ct-grid { display:grid; gap:12px; grid-template-columns: 1fr; }
-      @media (min-width: 720px) { .ct-grid { grid-template-columns: 1fr 1fr 1fr; } }
+      @media (min-width: 720px) { .ct-grid { grid-template-columns: 1fr 1 1fr; } }
 
       .ct-item { position:relative; overflow:hidden; }
       .ct-item::before {
