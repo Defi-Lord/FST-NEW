@@ -1,5 +1,5 @@
 // src/pages_ConnectWallet.tsx
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 type Props = {
   onBack?: () => void
@@ -13,32 +13,35 @@ declare global {
     backpack?: any
     solflare?: any
     exodus?: { solana?: any }
-    // Wallet Standard (if present)
     wallets?: { get(): any[] }
   }
 }
 
 type WalletId = 'phantom' | 'backpack' | 'solflare' | 'exodus' | 'other'
-
 type WalletItem = {
   id: WalletId
   name: string
   icon: JSX.Element
   installed: boolean
-  connect: () => Promise<string> // returns base58 address
+  connect: (opts?: any) => Promise<string> // returns base58 address
   installUrl?: string
 }
 
-const isMobile = () =>
-  /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '')
+const safeGetSaved = () => {
+  try { return localStorage.getItem('sol_wallet') } catch { return null }
+}
+const safeSetSaved = (addr: string) => {
+  try { localStorage.setItem('sol_wallet', addr) } catch {}
+}
 
 export default function ConnectWallet({ onBack, onConnected }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [connectingId, setConnectingId] = useState<WalletId | null>(null)
   const [detectedNote, setDetectedNote] = useState<string | null>(null)
+  const didAuto = useRef(false) // avoid double autos
 
-  // ——— Detect providers (multi-wallet) ———
-  const providers = useMemo(() => {
+  // —— Discover wallets & define real connect calls
+  const providers = useMemo<WalletItem[]>(() => {
     const list: WalletItem[] = []
 
     // Phantom
@@ -49,10 +52,10 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
       installed: !!phantom,
       icon: <IconPhantom />,
       installUrl: 'https://phantom.app/download',
-      connect: async () => {
+      connect: async (opts?: any) => {
         const prov = window.phantom?.solana || window.solana
         if (!prov) throw new Error('Phantom not found')
-        const res = await prov.connect()
+        const res = await prov.connect(opts)
         const addr = res?.publicKey?.toBase58?.()
         if (!addr) throw new Error('No public key from Phantom')
         return addr
@@ -67,10 +70,10 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
       installed: !!backpack,
       icon: <IconBackpack />,
       installUrl: 'https://www.backpack.app/download',
-      connect: async () => {
+      connect: async (opts?: any) => {
         const prov = window.backpack
         if (!prov) throw new Error('Backpack not found')
-        const res = await prov.connect()
+        const res = await prov.connect(opts)
         const addr = res?.publicKey?.toBase58?.()
         if (!addr) throw new Error('No public key from Backpack')
         return addr
@@ -85,10 +88,10 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
       installed: !!solflare,
       icon: <IconSolflare />,
       installUrl: 'https://solflare.com/download',
-      connect: async () => {
+      connect: async (opts?: any) => {
         const prov = window.solflare
         if (!prov) throw new Error('Solflare not found')
-        const res = await prov.connect()
+        const res = await prov.connect(opts)
         const addr = res?.publicKey?.toBase58?.()
         if (!addr) throw new Error('No public key from Solflare')
         return addr
@@ -103,68 +106,96 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
       installed: !!exodus,
       icon: <IconExodus />,
       installUrl: 'https://www.exodus.com/download/',
-      connect: async () => {
+      connect: async (opts?: any) => {
         const prov = window.exodus?.solana
         if (!prov) throw new Error('Exodus not found')
-        const res = await prov.connect()
+        const res = await prov.connect(opts)
         const addr = res?.publicKey?.toBase58?.()
         if (!addr) throw new Error('No public key from Exodus')
         return addr
       },
     })
 
-    // Fallback for any wallet that registers via Wallet Standard
+    // Wallet Standard “other”
     try {
       const std = window.wallets?.get?.() || []
-      const other = std.find((w: any) => !['phantom', 'backpack', 'solflare', 'exodus']
-        .some(k => (w.name || '').toLowerCase().includes(k)))
+      const other = std.find((w: any) =>
+        !['phantom','backpack','solflare','exodus'].some(k => (w.name || '').toLowerCase().includes(k))
+      )
       if (other) {
         list.push({
           id: 'other',
           name: other.name || 'Solana Wallet',
           installed: true,
           icon: <IconGeneric />,
-          connect: async () => {
-            const r = await (other as any).connect()
+          connect: async (opts?: any) => {
+            const r = await (other as any).connect(opts)
             const addr = r?.publicKey?.toBase58?.()
             if (!addr) throw new Error('No public key from wallet')
             return addr
           },
         })
       }
-    } catch {
-      /* ignore */
-    }
+    } catch {}
 
     return list
   }, [])
 
+  // UI note
   useEffect(() => {
     const installed = providers.filter(p => p.installed).map(p => p.name)
-    if (installed.length) {
-      setDetectedNote(`Detected: ${installed.join(' • ')}`)
-    } else {
-      setDetectedNote('No wallet detected yet on this device.')
-    }
+    setDetectedNote(installed.length ? `Detected: ${installed.join(' • ')}` : 'No wallet detected yet on this device.')
   }, [providers])
+
+  // —— Auto-skip: saved wallet OR silent reconnect
+  useEffect(() => {
+    if (didAuto.current) return
+    didAuto.current = true
+
+    const saved = safeGetSaved()
+    if (saved) {
+      onConnected(saved)
+      // Try updating it silently (doesn't block nav)
+      ;(async () => {
+        for (const w of providers) {
+          if (!w.installed) continue
+          try {
+            const addr = await w.connect({ onlyIfTrusted: true })
+            if (addr && addr !== saved) safeSetSaved(addr)
+            break
+          } catch {}
+        }
+      })()
+      return
+    }
+
+    ;(async () => {
+      for (const w of providers) {
+        if (!w.installed) continue
+        try {
+          const addr = await w.connect({ onlyIfTrusted: true })
+          if (addr) {
+            safeSetSaved(addr)
+            onConnected(addr)
+            return
+          }
+        } catch {}
+      }
+    })()
+  }, [providers, onConnected])
 
   const onPick = async (w: WalletItem) => {
     setError(null)
     setConnectingId(w.id)
     try {
       if (!w.installed) {
-        // Respect your requirement: Connect-first UI.
-        // If not installed, we still open their official page in a new tab (secondary).
         window.open(w.installUrl!, '_blank', 'noopener,noreferrer')
         setError(`${w.name} is not installed on this device.`)
         return
       }
       const addr = await w.connect()
-      // basic sanity
-      if (!addr || addr.length < 32 || addr.length > 60) {
-        throw new Error('Invalid address returned')
-      }
-      try { localStorage.setItem('sol_wallet', addr) } catch {}
+      if (!addr || addr.length < 32 || addr.length > 60) throw new Error('Invalid address returned')
+      safeSetSaved(addr)
       onConnected(addr)
     } catch (e: any) {
       setError(e?.message || `Failed to connect with ${w.name}`)
@@ -178,14 +209,12 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
       <Style />
 
       <div className="cw-wrap">
-        {/* Top bar */}
         <div className="cw-top">
           {onBack && <button className="cw-back" onClick={onBack} aria-label="Back">←</button>}
           <h2 className="cw-title">Connect Wallet</h2>
           <div style={{ width: 36 }} />
         </div>
 
-        {/* Hero */}
         <div className="cw-card cw-hero">
           <h1>Connect your Solana wallet</h1>
           <p>Securely link your real wallet to join contests, receive rewards, and save your progress.</p>
@@ -198,7 +227,6 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
 
         {detectedNote && <div className="cw-note subtle">{detectedNote}</div>}
 
-        {/* Wallet picker */}
         <div className="cw-grid">
           {providers.map(w => (
             <button
@@ -226,12 +254,13 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
   )
 }
 
-/* ---------- Icons (inline, no deps) ---------- */
+/* ---------- Icons (inline) ---------- */
 function IconPhantom() {
   return (
     <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden>
       <circle cx="12" cy="12" r="10" fill="#8b5cf6" />
-      <circle cx="9.5" cy="11" r="1.4" fill="#fff" /><circle cx="14.5" cy="11" r="1.4" fill="#fff" />
+      <circle cx="9.5" cy="11" r="1.4" fill="#fff" />
+      <circle cx="14.5" cy="11" r="1.4" fill="#fff" />
     </svg>
   )
 }
@@ -268,6 +297,7 @@ function IconGeneric() {
   )
 }
 
+/* ---------- Styles (beautiful glow + cards) ---------- */
 function Style() {
   return (
     <style>{`

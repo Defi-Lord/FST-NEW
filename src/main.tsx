@@ -27,7 +27,7 @@ import './styles/menu-drawer.css'
 
 type Route =
   | 'landing'
-  | 'connect'     // ⬅️ NEW
+  | 'connect'     // NEW
   | 'contest'
   | 'create'
   | 'leaderboard'
@@ -37,7 +37,7 @@ type Route =
   | 'top10'
   | 'fixtures'
   | 'stats'
-  // NEW routes
+  // menu pages
   | 'howToPlay'
   | 'about'
   | 'contact'
@@ -101,38 +101,53 @@ function App() {
     }
   }
 
-  // optional: remember connected wallet locally (backend later)
-  const [wallet, setWallet] = useState<string | null>(() => {
+  const getSavedWallet = () => {
     try { return localStorage.getItem('sol_wallet') } catch { return null }
-  })
-  const handleConnected = (addr: string) => {
-    setWallet(addr)
-    go('contest') // ⬅️ after connect, proceed to JoinContest
   }
 
   return (
     <>
-      {/* Landing → Connect (changed from 'contest' to 'connect') */}
-      {route === 'landing' && <Landing onLaunch={() => go('connect')} />}
+      {/* Landing → if wallet saved, skip to contest; else go connect */}
+      {route === 'landing' && (
+        <Landing
+          onLaunch={() => {
+            const saved = getSavedWallet()
+            if (saved) {
+              go('contest')   // already connected → skip connect page
+            } else {
+              go('connect')   // first time → connect page
+            }
+          }}
+        />
+      )}
 
-      {/* NEW: Connect Wallet page */}
+      {/* NEW: Connect Wallet page (auto-skip logic also inside the page) */}
       {route === 'connect' && (
         <ConnectWallet
           onBack={back}
-          onConnected={handleConnected}
+          onConnected={() => go('contest')}
         />
       )}
 
       {route === 'contest' && (
-        <JoinContest onSelect={() => go('create')} onBack={back} />
+        <JoinContest
+          onSelect={() => go('create')}
+          onBack={back}
+        />
       )}
 
       {route === 'create' && (
-        <CreateTeam onNext={() => go('leaderboard')} onBack={back} />
+        <CreateTeam
+          onNext={() => go('leaderboard')}
+          onBack={back}
+        />
       )}
 
       {route === 'leaderboard' && (
-        <Leaderboard onNext={() => go('rewards')} onBack={back} />
+        <Leaderboard
+          onNext={() => go('rewards')}
+          onBack={back}
+        />
       )}
 
       {route === 'rewards' && <Rewards onClaim={() => go('home')} />}
@@ -147,7 +162,6 @@ function App() {
           onTransfers={() => alert('Transfers coming soon')}
           onFixtures={() => go('fixtures')}
           onStats={() => go('stats')}
-          // NEW: hamburger menu destinations
           onHowToPlay={() => go('howToPlay')}
           onAboutUs={() => go('about')}
           onContactUs={() => go('contact')}
@@ -159,7 +173,7 @@ function App() {
       {route === 'fixtures' && <Fixtures onBack={back} />}
       {route === 'stats' && <Stats onBack={back} />}
 
-      {/* NEW pages rendered by the menu */}
+      {/* menu pages */}
       {route === 'howToPlay' && <HowToPlay onBack={back} />}
       {route === 'about' && <AboutUs onBack={back} />}
       {route === 'contact' && <ContactUs onBack={back} />}
