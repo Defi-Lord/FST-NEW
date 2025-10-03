@@ -6,6 +6,10 @@ type Props = {
   onConnected: (address: string) => void
 }
 
+/** Toggle this to require a signature on connect (recommended if you gate access). */
+const SIGN_ON_CONNECT = false
+const SIGNING_MESSAGE = 'Louder App — Verify wallet ownership.\n\nNonce: '
+
 declare global {
   interface Window {
     solana?: any
@@ -23,24 +27,43 @@ type WalletItem = {
   name: string
   icon: JSX.Element
   installed: boolean
-  connect: (opts?: any) => Promise<string> // returns base58 address
+  connect: (opts?: any) => Promise<{ address: string; provider?: any }>
   installUrl?: string
+  on?: ((ev: string, fn: (...args: any[]) => void) => void) | undefined
+  off?: ((ev: string, fn: (...args: any[]) => void) => void) | undefined
 }
 
-const safeGetSaved = () => {
-  try { return localStorage.getItem('sol_wallet') } catch { return null }
+const safeGetSaved = () => { try { return localStorage.getItem('sol_wallet') } catch { return null } }
+const safeSetSaved = (addr: string | null) => {
+  try {
+    if (!addr) localStorage.removeItem('sol_wallet')
+    else localStorage.setItem('sol_wallet', addr)
+  } catch {}
 }
-const safeSetSaved = (addr: string) => {
-  try { localStorage.setItem('sol_wallet', addr) } catch {}
+
+function toB58(pk: any): string | null {
+  try { return pk?.toBase58?.() ?? null } catch { return null }
+}
+
+function makeNonce(): string {
+  // human-friendly nonce (timestamp + random)
+  const rand = Math.random().toString(36).slice(2, 10)
+  return `${Date.now()}-${rand}`
 }
 
 export default function ConnectWallet({ onBack, onConnected }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [connectingId, setConnectingId] = useState<WalletId | null>(null)
   const [detectedNote, setDetectedNote] = useState<string | null>(null)
-  const didAuto = useRef(false) // avoid double autos
 
-  // —— Discover wallets & define real connect calls
+  const [connectedAddr, setConnectedAddr] = useState<string | null>(safeGetSaved())
+  const [connectedId, setConnectedId] = useState<WalletId | null>(null)
+  const currentProviderRef = useRef<any>(null)
+
+  const didAuto = useRef(false)
+  const listenersRef = useRef<{ [k: string]: (...args: any[]) => void }>({})
+
+  // —— Discover wallets (and give real connect calls)
   const providers = useMemo<WalletItem[]>(() => {
     const list: WalletItem[] = []
 
@@ -52,13 +75,15 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
       installed: !!phantom,
       icon: <IconPhantom />,
       installUrl: 'https://phantom.app/download',
+      on: phantom?.on?.bind(phantom),
+      off: phantom?.off?.bind(phantom),
       connect: async (opts?: any) => {
         const prov = window.phantom?.solana || window.solana
         if (!prov) throw new Error('Phantom not found')
         const res = await prov.connect(opts)
-        const addr = res?.publicKey?.toBase58?.()
+        const addr = toB58(res?.publicKey) || toB58(prov?.publicKey)
         if (!addr) throw new Error('No public key from Phantom')
-        return addr
+        return { address: addr, provider: prov }
       },
     })
 
@@ -70,13 +95,15 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
       installed: !!backpack,
       icon: <IconBackpack />,
       installUrl: 'https://www.backpack.app/download',
+      on: backpack?.on?.bind(backpack),
+      off: backpack?.off?.bind(backpack),
       connect: async (opts?: any) => {
         const prov = window.backpack
         if (!prov) throw new Error('Backpack not found')
         const res = await prov.connect(opts)
-        const addr = res?.publicKey?.toBase58?.()
+        const addr = toB58(res?.publicKey) || toB58(prov?.publicKey)
         if (!addr) throw new Error('No public key from Backpack')
-        return addr
+        return { address: addr, provider: prov }
       },
     })
 
@@ -88,13 +115,15 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
       installed: !!solflare,
       icon: <IconSolflare />,
       installUrl: 'https://solflare.com/download',
+      on: solflare?.on?.bind(solflare),
+      off: solflare?.off?.bind(solflare),
       connect: async (opts?: any) => {
         const prov = window.solflare
         if (!prov) throw new Error('Solflare not found')
         const res = await prov.connect(opts)
-        const addr = res?.publicKey?.toBase58?.()
+        const addr = toB58(res?.publicKey) || toB58(prov?.publicKey)
         if (!addr) throw new Error('No public key from Solflare')
-        return addr
+        return { address: addr, provider: prov }
       },
     })
 
@@ -106,17 +135,19 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
       installed: !!exodus,
       icon: <IconExodus />,
       installUrl: 'https://www.exodus.com/download/',
+      on: exodus?.on?.bind(exodus),
+      off: exodus?.off?.bind(exodus),
       connect: async (opts?: any) => {
         const prov = window.exodus?.solana
         if (!prov) throw new Error('Exodus not found')
         const res = await prov.connect(opts)
-        const addr = res?.publicKey?.toBase58?.()
+        const addr = toB58(res?.publicKey) || toB58(prov?.publicKey)
         if (!addr) throw new Error('No public key from Exodus')
-        return addr
+        return { address: addr, provider: prov }
       },
     })
 
-    // Wallet Standard “other”
+    // Wallet Standard “other” (first non-listed wallet)
     try {
       const std = window.wallets?.get?.() || []
       const other = std.find((w: any) =>
@@ -128,11 +159,13 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
           name: other.name || 'Solana Wallet',
           installed: true,
           icon: <IconGeneric />,
+          on: other?.on?.bind(other),
+          off: other?.off?.bind(other),
           connect: async (opts?: any) => {
             const r = await (other as any).connect(opts)
-            const addr = r?.publicKey?.toBase58?.()
+            const addr = toB58(r?.publicKey) || toB58((other as any)?.publicKey)
             if (!addr) throw new Error('No public key from wallet')
-            return addr
+            return { address: addr, provider: other }
           },
         })
       }
@@ -147,43 +180,96 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
     setDetectedNote(installed.length ? `Detected: ${installed.join(' • ')}` : 'No wallet detected yet on this device.')
   }, [providers])
 
-  // —— Auto-skip: saved wallet OR silent reconnect
+  // —— Event wiring for active provider (accountChanged / disconnect)
+  const attachProviderEvents = (prov: any, walletId: WalletId) => {
+    detachProviderEvents()
+    currentProviderRef.current = prov
+
+    // Some providers emit 'connect' with { publicKey }, most emit 'accountChanged' with PublicKey|null
+    const onAccount = (pk: any) => {
+      const addr = toB58(pk)
+      if (!addr) {
+        // treat as disconnect
+        safeSetSaved(null)
+        setConnectedAddr(null)
+        setConnectedId(null)
+        return
+      }
+      safeSetSaved(addr)
+      setConnectedAddr(addr)
+      setConnectedId(walletId)
+      // bubble up so app "knows" address changed
+      onConnected(addr)
+    }
+    const onDisconnect = () => {
+      safeSetSaved(null)
+      setConnectedAddr(null)
+      setConnectedId(null)
+    }
+    const onConnect = (args?: any) => {
+      const addr = toB58(args?.publicKey) || toB58(prov?.publicKey)
+      if (addr) {
+        safeSetSaved(addr)
+        setConnectedAddr(addr)
+        setConnectedId(walletId)
+        onConnected(addr)
+      }
+    }
+
+    // keep handles to remove later
+    listenersRef.current = { onAccount, onDisconnect, onConnect }
+
+    prov?.on?.('accountChanged', onAccount)
+    prov?.on?.('disconnect', onDisconnect)
+    prov?.on?.('connect', onConnect)
+  }
+
+  const detachProviderEvents = () => {
+    const prov = currentProviderRef.current
+    if (!prov) return
+    try {
+      const L = listenersRef.current
+      prov?.off?.('accountChanged', L.onAccount)
+      prov?.off?.('disconnect', L.onDisconnect)
+      prov?.off?.('connect', L.onConnect)
+    } catch {}
+    listenersRef.current = {}
+    currentProviderRef.current = null
+  }
+
+  // —— Auto: saved OR silent reconnect
   useEffect(() => {
     if (didAuto.current) return
     didAuto.current = true
 
     const saved = safeGetSaved()
     if (saved) {
+      // Inform parent immediately so it can route/gate.
+      setConnectedAddr(saved)
       onConnected(saved)
-      // Try updating it silently (doesn't block nav)
-      ;(async () => {
-        for (const w of providers) {
-          if (!w.installed) continue
-          try {
-            const addr = await w.connect({ onlyIfTrusted: true })
-            if (addr && addr !== saved) safeSetSaved(addr)
-            break
-          } catch {}
-        }
-      })()
-      return
     }
 
+    // Try silent connect on any installed wallet (does not block UI)
     ;(async () => {
       for (const w of providers) {
         if (!w.installed) continue
         try {
-          const addr = await w.connect({ onlyIfTrusted: true })
-          if (addr) {
-            safeSetSaved(addr)
-            onConnected(addr)
+          const { address, provider } = await w.connect({ onlyIfTrusted: true })
+          if (address) {
+            attachProviderEvents(provider, w.id)
+            safeSetSaved(address)
+            setConnectedAddr(address)
+            setConnectedId(w.id)
+            onConnected(address)
             return
           }
         } catch {}
       }
     })()
-  }, [providers, onConnected])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providers])
 
+  // —— Core connect flow
   const onPick = async (w: WalletItem) => {
     setError(null)
     setConnectingId(w.id)
@@ -193,15 +279,49 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
         setError(`${w.name} is not installed on this device.`)
         return
       }
-      const addr = await w.connect()
-      if (!addr || addr.length < 32 || addr.length > 60) throw new Error('Invalid address returned')
-      safeSetSaved(addr)
-      onConnected(addr)
+
+      const { address, provider } = await w.connect()
+      if (!address || address.length < 32 || address.length > 60) throw new Error('Invalid address returned')
+
+      // Optional signature (proof of ownership)
+      if (SIGN_ON_CONNECT) {
+        const nonce = makeNonce()
+        const message = SIGNING_MESSAGE + nonce
+        const encoded = new TextEncoder().encode(message)
+        try {
+          // Most Solana wallets expose signMessage
+          await provider?.signMessage?.(encoded, 'utf8')
+          // In a real app: send {address, nonce, signature} to your backend to mint a session.
+        } catch (e: any) {
+          throw new Error('Signature was rejected — cannot continue.')
+        }
+      }
+
+      attachProviderEvents(provider, w.id)
+      safeSetSaved(address)
+      setConnectedAddr(address)
+      setConnectedId(w.id)
+
+      // Let the app know; parent can navigate away or unlock access.
+      onConnected(address)
     } catch (e: any) {
       setError(e?.message || `Failed to connect with ${w.name}`)
     } finally {
       setConnectingId(null)
     }
+  }
+
+  // —— Disconnect
+  const onDisconnectClick = async () => {
+    try {
+      const prov = currentProviderRef.current
+      // Many wallets offer .disconnect(); if not, we just clear state.
+      await prov?.disconnect?.()
+    } catch {}
+    detachProviderEvents()
+    safeSetSaved(null)
+    setConnectedAddr(null)
+    setConnectedId(null)
   }
 
   return (
@@ -223,6 +343,18 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
             <div>✓ Works with Phantom, Backpack, Solflare, Exodus</div>
             <div>✓ One-tap reconnect next time</div>
           </div>
+
+          {connectedAddr ? (
+            <div className="cw-connected">
+              <div className="addr-tag">
+                Connected as <strong>{connectedAddr.slice(0,6)}…{connectedAddr.slice(-4)}</strong>
+              </div>
+              <div className="connected-actions">
+                <button onClick={() => { navigator.clipboard?.writeText(connectedAddr) }}>Copy Address</button>
+                <button onClick={onDisconnectClick}>Disconnect</button>
+              </div>
+            </div>
+          ) : null}
         </div>
 
         {detectedNote && <div className="cw-note subtle">{detectedNote}</div>}
@@ -247,7 +379,7 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
         {error && <div className="cw-error">{error}</div>}
 
         <div className="cw-secure subtle">
-          We will store your public wallet address. We never request your seed phrase or private key.
+          We store only your public wallet address. We never request your seed phrase or private key.
         </div>
       </div>
     </div>
@@ -319,6 +451,15 @@ function Style() {
       .cw-hero h1 { margin:0 0 6px; font-size: clamp(22px, 4.8vw, 38px); }
       .cw-hero p { margin:0 0 10px; color: rgba(255,255,255,0.85); }
       .cw-bullets { display:grid; gap:6px; color: rgba(255,255,255,0.9); justify-content:center; }
+
+      .cw-connected {
+        display:flex; align-items:center; justify-content:center; gap:10px; margin-top:10px; flex-wrap:wrap;
+      }
+      .addr-tag {
+        padding: 8px 10px; border-radius: 999px; background: #0b1220;
+        border: 1px solid rgba(255,255,255,0.06); font-family: monospace;
+      }
+      .connected-actions button { margin-left: 6px; }
 
       .cw-note { margin: 8px 0 12px; text-align: center; }
 
