@@ -18,7 +18,7 @@ export type ContestRealm = 'free' | 'weekly' | 'monthly' | 'seasonal'
 /** Rules per realm */
 export type RealmRules = {
   players: 11 | 13 | 15
-  transferpool: 0 | 1 // per GW (your monthly/seasonal spec)
+  transferpool: 0 | 1 // per GW
 }
 
 /** Central rules table */
@@ -33,7 +33,27 @@ const START_BUDGET = 100 // £100m
 const MAX_PER_POSITION: Record<Position, number> = { GK: 2, DEF: 5, MID: 5, FWD: 3 }
 const MIN_PER_POSITION: Record<Position, number> = { GK: 1, DEF: 3, MID: 3, FWD: 1 } // enables 11 & 13-player squads
 
+/* ---------- tiny safe localStorage helpers ---------- */
+function lsGet(key: string) {
+  try { return localStorage.getItem(key) } catch { return null }
+}
+function lsSet(key: string, val: string | null) {
+  try {
+    if (val == null) localStorage.removeItem(key)
+    else localStorage.setItem(key, val)
+  } catch {}
+}
+
+/* ---------- App state shape ---------- */
 type AppState = {
+  // profile
+  fullName: string
+  setFullName: (name: string) => void
+
+  // wallet
+  walletAddress: string | null
+  setWalletAddress: (addr: string | null) => void
+
   // realm
   realm: ContestRealm
   setRealm: (r: ContestRealm) => void
@@ -59,6 +79,20 @@ type AppState = {
 const Ctx = createContext<AppState | null>(null)
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
+  // profile
+  const [fullName, setFullNameState] = useState<string>(() => lsGet('full_name') || '')
+  const setFullName = (name: string) => {
+    setFullNameState(name)
+    lsSet('full_name', name)
+  }
+
+  // wallet
+  const [walletAddress, setWalletAddressState] = useState<string | null>(() => lsGet('sol_wallet'))
+  const setWalletAddress = (addr: string | null) => {
+    setWalletAddressState(addr)
+    lsSet('sol_wallet', addr)
+  }
+
   // which world are we in?
   const [realm, setRealm] = useState<ContestRealm>('free')
 
@@ -132,11 +166,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }
 
   const value = useMemo<AppState>(() => ({
+    // profile
+    fullName, setFullName,
+    // wallet
+    walletAddress, setWalletAddress,
+    // realm
     realm, setRealm, rules,
+    // current realm view
     budget, team, formation, setFormation,
+    // actions
     addPlayer, removePlayer, resetTeam,
+    // constants
     START_BUDGET, MAX_PER_POSITION, MIN_PER_POSITION,
-  }), [realm, rules, budget, team, formation])
+  }), [fullName, walletAddress, realm, rules, budget, team, formation])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }
