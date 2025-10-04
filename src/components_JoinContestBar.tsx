@@ -1,9 +1,40 @@
 // src/components_JoinContestBar.tsx
 import React from 'react'
 
-export default function JoinContestBar({ onClick }: { onClick: () => void }) {
+type Props = {
+  onClick: () => void
+  /** Main title (keeps legacy default) */
+  label?: string
+  /** Sub text (keeps legacy default) */
+  sub?: string
+  /** Disable interaction (dim + no click) */
+  disabled?: boolean
+}
+
+export default function JoinContestBar({
+  onClick,
+  label = 'Join contest',
+  sub = '$5 entry · Weekly · Monthly · Seasonal',
+  disabled = false,
+}: Props) {
+  const handleKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (disabled) return
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      onClick()
+    }
+  }
+
   return (
-    <div className="jc-wrap" onClick={onClick} role="button" aria-label="Join contest">
+    <div
+      className={`jc-wrap ${disabled ? 'is-disabled' : ''}`}
+      onClick={() => { if (!disabled) onClick() }}
+      onKeyDown={handleKey}
+      role="button"
+      aria-label={label}
+      aria-disabled={disabled}
+      tabIndex={0}
+    >
       <style>{`
         .jc-wrap {
           position: relative;
@@ -17,7 +48,7 @@ export default function JoinContestBar({ onClick }: { onClick: () => void }) {
             radial-gradient(120% 120% at 0% 0%, rgba(99,102,241,0.22), transparent 60%),
             radial-gradient(120% 120% at 100% 100%, rgba(236,72,153,0.22), transparent 60%),
             linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.04));
-          transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+          transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease, opacity 120ms ease;
         }
         .jc-wrap:hover {
           transform: translateY(-1px);
@@ -48,19 +79,25 @@ export default function JoinContestBar({ onClick }: { onClick: () => void }) {
         .jc-title { font-weight: 900; letter-spacing: .2px; }
         .jc-sub { opacity:.9; font-size: 12px; }
         .jc-chevron { margin-left:auto; font-weight:900; opacity:.85; }
+
+        .jc-wrap.is-disabled {
+          opacity: .5;
+          cursor: not-allowed;
+          pointer-events: none;
+        }
       `}</style>
 
       <div className="jc-row">
-        <div className="jc-icon">
+        <div className="jc-icon" aria-hidden>
           <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden>
             <path d="M6 4h12l2 6-8 10L4 10l2-6z" fill="#fff" opacity=".95"/>
           </svg>
         </div>
         <div style={{display:'flex',flexDirection:'column'}}>
-          <div className="jc-title">Join contest</div>
-          <div className="jc-sub">$5 entry · Weekly · Monthly · Seasonal</div>
+          <div className="jc-title">{label}</div>
+          <div className="jc-sub">{sub}</div>
         </div>
-        <div className="jc-chevron">→</div>
+        <div className="jc-chevron" aria-hidden>→</div>
       </div>
     </div>
   )
