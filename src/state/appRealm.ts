@@ -1,48 +1,42 @@
 // src/state/appRealm.ts
-import { createContext, useContext, useMemo, useState } from 'react'
-import type { ContestRealm } from '../types/contest'
 
-// One store per realm, so data never mixes.
-type RealmStores = {
-  teamByRealm: Record<ContestRealm, { ids: string[] }>
-  pointsByRealm: Record<ContestRealm, number>
-  // add whatever else you need (budget, transfers, etc)
+/** Contest "realms" (separate worlds) */
+export type ContestRealm = 'free' | 'weekly' | 'monthly' | 'seasonal'
+
+/** Rules per realm */
+export type RealmRules = {
+  /** Squad size required for that realm */
+  players: 11 | 13 | 15
+  /** Whether transfer pool is active (1) or not (0) */
+  transferpool: 0 | 1
 }
 
-const defaultStores: RealmStores = {
-  teamByRealm:   { free:{ids:[]}, weekly:{ids:[]}, monthly:{ids:[]}, seasonal:{ids:[]} } as any,
-  pointsByRealm: { free:0, weekly:0, monthly:0, seasonal:0 },
+/** Central rules table used across the app */
+export const REALM_RULES: Record<ContestRealm, RealmRules> = {
+  free:      { players: 15, transferpool: 0 },
+  weekly:    { players: 11, transferpool: 0 },
+  monthly:   { players: 13, transferpool: 1 },
+  seasonal:  { players: 15, transferpool: 1 },
 }
 
-type Ctx = {
-  realm: ContestRealm
-  setRealm: (r: ContestRealm) => void
-  stores: RealmStores
-  setTeam: (ids: string[]) => void
-  addPoints: (delta: number) => void
+/** Default starting budget (£ millions) */
+export const START_BUDGET = 100
+
+/** Position type used elsewhere */
+export type Position = 'GK' | 'DEF' | 'MID' | 'FWD'
+
+/** Per-position maximums (caps) */
+export const MAX_PER_POSITION: Record<Position, number> = {
+  GK: 2,
+  DEF: 5,
+  MID: 5,
+  FWD: 3,
 }
 
-const AppRealmContext = createContext<Ctx>(null as any)
-
-export function AppRealmProvider({ children }: { children: React.ReactNode }) {
-  const [realm, setRealm] = useState<ContestRealm>('free')
-  const [stores, setStores] = useState<RealmStores>(defaultStores)
-
-  const value = useMemo<Ctx>(() => ({
-    realm,
-    setRealm,
-    stores,
-    setTeam: (ids) => setStores(s => ({
-      ...s,
-      teamByRealm: { ...s.teamByRealm, [realm]: { ids } }
-    })),
-    addPoints: (d) => setStores(s => ({
-      ...s,
-      pointsByRealm: { ...s.pointsByRealm, [realm]: s.pointsByRealm[realm] + d }
-    })),
-  }), [realm, stores])
-
-  return <AppRealmContext.Provider value={value}>{children}</AppRealmContext.Provider>
+/** Minimums to make smaller squads (11/13) valid */
+export const MIN_PER_POSITION: Record<Position, number> = {
+  GK: 1,
+  DEF: 3,
+  MID: 3,
+  FWD: 1,
 }
-
-export const useRealm = () => useContext(AppRealmContext)
