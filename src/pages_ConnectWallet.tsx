@@ -46,9 +46,16 @@ function toB58(pk: any): string | null {
 }
 
 function makeNonce(): string {
-  // human-friendly nonce (timestamp + random)
   const rand = Math.random().toString(36).slice(2, 10)
   return `${Date.now()}-${rand}`
+}
+
+/** iOS + Phantom helpers */
+const isiOS = () => /iPhone|iPad|iPod/i.test(navigator.userAgent)
+const isPhantomInApp = () => !!(window.solana && (window.solana.isPhantom || window.phantom?.solana))
+const phantomBrowseLink = () => {
+  const url = typeof window !== 'undefined' ? window.location.href : ''
+  return `https://phantom.app/ul/browse/${encodeURIComponent(url)}`
 }
 
 export default function ConnectWallet({ onBack, onConnected }: Props) {
@@ -185,11 +192,9 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
     detachProviderEvents()
     currentProviderRef.current = prov
 
-    // Some providers emit 'connect' with { publicKey }, most emit 'accountChanged' with PublicKey|null
     const onAccount = (pk: any) => {
       const addr = toB58(pk)
       if (!addr) {
-        // treat as disconnect
         safeSetSaved(null)
         setConnectedAddr(null)
         setConnectedId(null)
@@ -198,7 +203,6 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
       safeSetSaved(addr)
       setConnectedAddr(addr)
       setConnectedId(walletId)
-      // bubble up so app "knows" address changed
       onConnected(addr)
     }
     const onDisconnect = () => {
@@ -216,9 +220,7 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
       }
     }
 
-    // keep handles to remove later
     listenersRef.current = { onAccount, onDisconnect, onConnect }
-
     prov?.on?.('accountChanged', onAccount)
     prov?.on?.('disconnect', onDisconnect)
     prov?.on?.('connect', onConnect)
@@ -244,12 +246,10 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
 
     const saved = safeGetSaved()
     if (saved) {
-      // Inform parent immediately so it can route/gate.
       setConnectedAddr(saved)
-      onConnected(saved)
+      onConnected(saved) // parent: route to HomeHub
     }
 
-    // Try silent connect on any installed wallet (does not block UI)
     ;(async () => {
       for (const w of providers) {
         if (!w.installed) continue
@@ -274,6 +274,12 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
     setError(null)
     setConnectingId(w.id)
     try {
+      // iPhone: open this page inside Phantom first so the approval sheet appears
+      if (w.id === 'phantom' && isiOS() && !isPhantomInApp()) {
+        window.location.href = phantomBrowseLink()
+        return
+      }
+
       if (!w.installed) {
         window.open(w.installUrl!, '_blank', 'noopener,noreferrer')
         setError(`${w.name} is not installed on this device.`)
@@ -283,15 +289,13 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
       const { address, provider } = await w.connect()
       if (!address || address.length < 32 || address.length > 60) throw new Error('Invalid address returned')
 
-      // Optional signature (proof of ownership)
       if (SIGN_ON_CONNECT) {
         const nonce = makeNonce()
         const message = SIGNING_MESSAGE + nonce
         const encoded = new TextEncoder().encode(message)
         try {
-          // Most Solana wallets expose signMessage
           await provider?.signMessage?.(encoded, 'utf8')
-          // In a real app: send {address, nonce, signature} to your backend to mint a session.
+          // send {address, nonce, signature} to backend if you add auth
         } catch (e: any) {
           throw new Error('Signature was rejected — cannot continue.')
         }
@@ -301,9 +305,7 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
       safeSetSaved(address)
       setConnectedAddr(address)
       setConnectedId(w.id)
-
-      // Let the app know; parent can navigate away or unlock access.
-      onConnected(address)
+      onConnected(address) // parent: navigate('/homehub')
     } catch (e: any) {
       setError(e?.message || `Failed to connect with ${w.name}`)
     } finally {
@@ -315,7 +317,6 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
   const onDisconnectClick = async () => {
     try {
       const prov = currentProviderRef.current
-      // Many wallets offer .disconnect(); if not, we just clear state.
       await prov?.disconnect?.()
     } catch {}
     detachProviderEvents()
@@ -356,6 +357,25 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
             </div>
           ) : null}
         </div>
+
+        {/* iOS helper: if not inside Phantom, show "Open in Phantom" */}
+        {isiOS() && !isPhantomInApp() && (
+          <div className="cw-card" style={{ margin: '8px 0', textAlign: 'center' }}>
+            <p style={{ margin: 0, opacity: .9 }}>
+              On iPhone, connecting works best inside the Phantom app.
+            </p>
+            <a
+              href={phantomBrowseLink()}
+              className="btn"
+              style={{
+                display:'inline-block', marginTop:8, padding:'10px 14px',
+                borderRadius:12, border:'1px solid rgba(255,255,255,0.2)'
+              }}
+            >
+              Open this page in Phantom
+            </a>
+          </div>
+        )}
 
         {detectedNote && <div className="cw-note subtle">{detectedNote}</div>}
 
