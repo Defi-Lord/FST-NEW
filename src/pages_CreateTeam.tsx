@@ -4,11 +4,11 @@ import { useApp, type Player, type Position } from './state'
 import TopBar from './components_TopBar'
 import { fetchBootstrap } from './api'
 
-export const __CREATE_TEAM_FILE_ID__ = 'CreateTeam.V5.ToggleRemove+StickyUI';
+export const __CREATE_TEAM_FILE_ID__ = 'CreateTeam.V6.RealmAware+MinPos';
 
 const START_BUDGET = 100.0
-const LIMITS: Record<Position, number> = { GK: 2, DEF: 5, MID: 5, FWD: 3 }
-const TOTAL_SQUAD = 15
+const LIMITS: Record<Position, number> = { GK: 2, DEF: 5, MID: 5, FWD: 3 } // max caps
+const MIN_REQ: Record<Position, number> = { GK: 1, DEF: 3, MID: 3, FWD: 1 } // new: realm-friendly mins
 const CLUB_CAP = 3
 
 const formatMoney = (n: number) => `£${n.toFixed(1)}m`
@@ -48,7 +48,8 @@ export default function CreateTeam({
   onNext: () => void
   onBack?: () => void
 }) {
-  const { team, addPlayer, removePlayer, budget } = useApp()
+  const { team, addPlayer, removePlayer, budget, rules } = useApp()
+  const TOTAL_SQUAD = rules.players
 
   // --- page state ---
   const [loading, setLoading] = useState(true)
@@ -57,7 +58,7 @@ export default function CreateTeam({
   const [q, setQ] = useState('')
   const [pos, setPos] = useState<'ALL' | Position>('ALL')
 
-  // --- load players (unchanged approach) ---
+  // --- load players ---
   useEffect(() => {
     let mounted = true
     ;(async () => {
@@ -100,7 +101,7 @@ export default function CreateTeam({
     return () => { mounted = false }
   }, [])
 
-  // --- counts & filters (unchanged logic) ---
+  // --- counts & filters ---
   const posCount = useMemo(() => {
     const c: Record<Position, number> = { GK: 0, DEF: 0, MID: 0, FWD: 0 }
     team.forEach((p: Player) => { c[p.position]++ })
@@ -130,20 +131,18 @@ export default function CreateTeam({
     return { ok: true }
   }
 
-  // --- add/remove handlers (toggle on the SAME button) ---
+  // --- add/remove handlers (toggle) ---
   const add = (p: Player) => {
     const v = canAdd(p)
     if (!v.ok) return alert(v.reason)
     addPlayer(p)
   }
 
-  // make remove work whether removePlayer wants an id or an object
   const remove = (p: Player) => {
     try {
       // @ts-ignore – attempt id first
       removePlayer?.(p.id)
     } catch {
-      // fallback if API expects full player
       // @ts-ignore
       removePlayer?.(p)
     }
@@ -152,10 +151,14 @@ export default function CreateTeam({
   const isSelected = (p: Player) =>
     team.some(s => String(s.id) === String(p.id))
 
-  const complete =
-    team.length === TOTAL_SQUAD &&
-    (['GK', 'DEF', 'MID', 'FWD'] as Position[]).every(k => posCount[k] === LIMITS[k]) &&
-    budget >= 0
+  // completion rule: exact length + minimum viable shape
+  const meetsMinimums =
+    posCount.GK >= MIN_REQ.GK &&
+    posCount.DEF >= MIN_REQ.DEF &&
+    posCount.MID >= MIN_REQ.MID &&
+    posCount.FWD >= MIN_REQ.FWD
+
+  const complete = team.length === TOTAL_SQUAD && meetsMinimums && budget >= 0
 
   const used = START_BUDGET - budget
   const usedPct = Math.min(100, Math.max(0, (used / START_BUDGET) * 100))
@@ -279,14 +282,13 @@ export default function CreateTeam({
           </div>
         </div>
 
-        {/* Mini selected tray (instant remove) */}
+        {/* Mini selected tray */}
         {team.length > 0 && (
           <div className="ct-tray" aria-label="Selected players">
             <div className="ct-tray-list">
               {team.map(p => (
                 <div key={`chip-${p.id}`} className="ct-chip" title={p.name}>
                   <span className="ct-chip-text">{shortName(p.name)}</span>
-                  {/* Remove also available up here */}
                   <button className="ct-chip-x" onClick={() => remove(p)} aria-label={`Remove ${p.name}`}>✕</button>
                 </div>
               ))}
@@ -294,7 +296,7 @@ export default function CreateTeam({
           </div>
         )}
 
-        {/* PLAYERS SECTION (unchanged grid/list, but SAME button toggles Add/Remove) */}
+        {/* Players list */}
         {loading && <div className="card">Loading players…</div>}
         {err && <div className="card" style={{ borderColor: 'crimson' }}>{err}</div>}
 
@@ -332,7 +334,7 @@ export default function CreateTeam({
                     </div>
                   </div>
 
-                  {/* pos / club / price + TOGGLING BUTTON */}
+                  {/* pos / club / price + Toggle */}
                   <div style={{ width: 'var(--col-pos)', textAlign: 'center', fontSize:'var(--fs-sm)' }}>{p.position}</div>
                   <div
                     style={{ width: 'var(--col-club)', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize:'var(--fs-sm)' }}
@@ -360,7 +362,7 @@ export default function CreateTeam({
           </div>
         )}
 
-        {/* “Your Squad” card (unchanged) */}
+        {/* “Your Squad” */}
         <div className="card" style={{ marginTop: 10 }}>
           <h3 style={{ marginTop: 0, fontSize: 'var(--fs-lg)' }}>Your Squad ({team.length}/{TOTAL_SQUAD})</h3>
           <ul style={{ listStyle: 'none', padding: 0, display: 'grid', gap: 6 }}>
@@ -401,7 +403,7 @@ export default function CreateTeam({
           </div>
           <button
             className="ct-continue"
-            onClick={() => complete ? onNext() : alert('Select 15 players within budget and position limits.')}
+            onClick={() => complete ? onNext() : alert('Select your full squad within budget and position limits.')}
             disabled={!complete}
           >
             Continue

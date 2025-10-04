@@ -98,9 +98,10 @@ export default function HomeHub({
   onViewTeam, onCreateTeam, onJoinContest, onLeaderboard, onTransfers, onFixtures, onStats, onBack, onTop10,
   onHowToPlay, onAboutUs, onContactUs
 }: Props) {
-  const { fullName, budget, team } = useApp()
+  const { fullName, budget, team, realm, setRealm, rules } = useApp()
   const picked = team.length
-  const progressPct = useMemo(() => Math.min(100, Math.round((picked / 15) * 100)), [picked])
+  const totalNeeded = rules.players
+  const progressPct = useMemo(() => Math.min(100, Math.round((picked / totalNeeded) * 100)), [picked, totalNeeded])
 
   const [lb, setLb] = useState<LbEntry[] | null | 'error'>(null)
   const [fixture, setFixture] = useState<NextFixtureView | null | 'error'>(null)
@@ -134,8 +135,8 @@ export default function HomeHub({
   const goAboutUs   = onAboutUs   ?? (() => alert('About Us'))
   const goContact   = onContactUs ?? (() => alert('Contact Us'))
 
-  const primaryAction = picked < 15
-    ? { label: `Pick ${15 - picked} more`, onClick: handleCreateTeam }
+  const primaryAction = picked < totalNeeded
+    ? { label: `Pick ${totalNeeded - picked} more`, onClick: handleCreateTeam }
     : { label: 'View Team', onClick: handleViewTeam }
 
   const clubsInFixture = useMemo(() => {
@@ -202,6 +203,17 @@ export default function HomeHub({
           }
         />
 
+        {/* Realm switch banner (only in paid realms) */}
+        {realm !== 'free' && (
+          <div className="banner" style={{ margin: '8px 0 12px', border: '1px solid rgba(255,255,255,0.12)' }}>
+            <div>
+              <div style={{fontWeight:900}}>You’re in {realm.toUpperCase()} contest</div>
+              <div className="subtle">Tap below to go back to the free global hub/leaderboard.</div>
+            </div>
+            <button className="btn-add" onClick={() => setRealm('free')}>Go to Free Contest</button>
+          </div>
+        )}
+
         {/* Greeting */}
         <div style={{margin:'6px 0 10px'}}>
           <div style={{fontWeight:900,fontSize:20,letterSpacing:.2}}>Welcome</div>
@@ -209,9 +221,11 @@ export default function HomeHub({
         </div>
 
         {/* 🔥 Animated JOIN CONTEST bar */}
-        <div style={{ margin: '10px 0 14px' }}>
-          <JoinContestBar onClick={handleJoin} />
-        </div>
+        {realm === 'free' && (
+          <div style={{ margin: '10px 0 14px' }}>
+            <JoinContestBar onClick={handleJoin} />
+          </div>
+        )}
 
         {/* Squad status */}
         <div className="card" style={{
@@ -222,7 +236,7 @@ export default function HomeHub({
           <div className="row" style={{alignItems:'flex-start'}}>
             <div>
               <div style={{fontWeight:900, fontSize:18}}>Your Squad</div>
-              <div className="subtle">{picked}/15 players selected</div>
+              <div className="subtle">{picked}/{totalNeeded} players selected</div>
               <div className="progress" style={{marginTop:10}}>
                 <span style={{width: `${progressPct}%`}} />
               </div>
@@ -253,11 +267,14 @@ export default function HomeHub({
               <div>
                 <div style={{fontWeight:900, fontSize:18}}>{fixture.home} vs {fixture.away}</div>
                 <div className="subtle">{formatLocal(fixture.kickoff_utc)}</div>
-                {clubsInFixture.count > 0 && (
-                  <div className="chip" style={{marginTop:10}}>
-                    {clubsInFixture.count} of your player{clubsInFixture.count === 1 ? '' : 's'} will play
-                  </div>
-                )}
+                {(() => {
+                  const { count } = (() => {
+                    const clubs = new Set([fixture.home, fixture.away])
+                    const c = team.filter(p => clubs.has(p.club)).length
+                    return { count: c }
+                  })()
+                  return count > 0 ? <div className="chip" style={{marginTop:10}}>{count} of your player{count === 1 ? '' : 's'} will play</div> : null
+                })()}
               </div>
               <button className="btn-ghost" onClick={handleFixtures}>View fixtures</button>
             </div>
@@ -271,9 +288,9 @@ export default function HomeHub({
           border: '1px solid rgba(255,255,255,0.12)'
         }}>
           <div style={{fontSize:18,fontWeight:900,marginBottom:6}}>Premier League Weekly</div>
-          <div className="subtle" style={{marginBottom:14}}>Set your XI and compete on the global leaderboard.</div>
+          <div className="subtle" style={{marginBottom:14}}>Set your XI and compete on the {realm === 'free' ? 'free global' : realm} leaderboard.</div>
           <div className="hero-tags">
-            <span>Premier League</span><span>Weekly</span><span>Free to play</span>
+            <span>Premier League</span><span>Weekly</span><span>{realm === 'free' ? 'Free to play' : 'Contest realm'}</span>
           </div>
           <div style={{display:'flex',gap:10,marginTop:14}}>
             <button className="cta" onClick={handleJoin}>Enter</button>
@@ -301,11 +318,11 @@ export default function HomeHub({
         </div>
 
         {/* Finish squad banner */}
-        {picked < 15 && (
+        {picked < totalNeeded && (
           <div className="banner" style={{ border: '1px solid rgba(255,255,255,0.12)'}}>
             <div>
               <div style={{fontWeight:900}}>Finish your squad</div>
-              <div className="subtle">You need {15 - picked} more player{15 - picked === 1 ? '' : 's'} to enter contests.</div>
+              <div className="subtle">You need {totalNeeded - picked} more player{totalNeeded - picked === 1 ? '' : 's'} to enter contests.</div>
             </div>
             <button className="btn-add" onClick={handleCreateTeam}>Complete Squad</button>
           </div>
@@ -368,5 +385,3 @@ export default function HomeHub({
     </div>
   )
 }
-
-/* ======= styles (same as before) ======= */
