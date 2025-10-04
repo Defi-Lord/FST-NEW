@@ -8,7 +8,7 @@ export const __CREATE_TEAM_FILE_ID__ = 'CreateTeam.V6.RealmAware+MinPos';
 
 const START_BUDGET = 100.0
 const LIMITS: Record<Position, number> = { GK: 2, DEF: 5, MID: 5, FWD: 3 } // max caps
-const MIN_REQ: Record<Position, number> = { GK: 1, DEF: 3, MID: 3, FWD: 1 } // new: realm-friendly mins
+const MIN_REQ: Record<Position, number> = { GK: 1, DEF: 3, MID: 3, FWD: 1 } // realm-friendly mins
 const CLUB_CAP = 3
 
 const formatMoney = (n: number) => `£${n.toFixed(1)}m`
@@ -51,14 +51,14 @@ export default function CreateTeam({
   const { team, addPlayer, removePlayer, budget, rules } = useApp()
   const TOTAL_SQUAD = rules.players
 
-  // --- page state ---
+  // page state
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
   const [all, setAll] = useState<Player[]>([])
   const [q, setQ] = useState('')
   const [pos, setPos] = useState<'ALL' | Position>('ALL')
 
-  // --- load players ---
+  // load players
   useEffect(() => {
     let mounted = true
     ;(async () => {
@@ -101,7 +101,7 @@ export default function CreateTeam({
     return () => { mounted = false }
   }, [])
 
-  // --- counts & filters ---
+  // counts & filters
   const posCount = useMemo(() => {
     const c: Record<Position, number> = { GK: 0, DEF: 0, MID: 0, FWD: 0 }
     team.forEach((p: Player) => { c[p.position]++ })
@@ -121,7 +121,7 @@ export default function CreateTeam({
       .sort((a, b) => b.price - a.price)
   }, [all, q, pos])
 
-  // --- rules ---
+  // rules
   function canAdd(p: Player): { ok: boolean; reason?: string } {
     if (team.find(s => String(s.id) === String(p.id))) return { ok: false, reason: 'Already in squad' }
     if (team.length >= TOTAL_SQUAD) return { ok: false, reason: 'Squad is full' }
@@ -131,27 +131,16 @@ export default function CreateTeam({
     return { ok: true }
   }
 
-  // --- add/remove handlers (toggle) ---
   const add = (p: Player) => {
     const v = canAdd(p)
     if (!v.ok) return alert(v.reason)
     addPlayer(p)
   }
-
   const remove = (p: Player) => {
-    try {
-      // @ts-ignore – attempt id first
-      removePlayer?.(p.id)
-    } catch {
-      // @ts-ignore
-      removePlayer?.(p)
-    }
+    try { /* @ts-ignore */ removePlayer?.(p.id) } catch { /* @ts-ignore */ removePlayer?.(p) }
   }
+  const isSelected = (p: Player) => team.some(s => String(s.id) === String(p.id))
 
-  const isSelected = (p: Player) =>
-    team.some(s => String(s.id) === String(p.id))
-
-  // completion rule: exact length + minimum viable shape
   const meetsMinimums =
     posCount.GK >= MIN_REQ.GK &&
     posCount.DEF >= MIN_REQ.DEF &&
@@ -313,9 +302,8 @@ export default function CreateTeam({
             {filtered.map(p => {
               const selected = isSelected(p)
               const verdict = canAdd(p)
-              const disabled = !selected && !verdict.ok // only block Add, never block Remove
+              const disabled = !selected && !verdict.ok
               const hint = selected ? 'Remove from squad' : verdict.reason
-
               return (
                 <div key={`${p.id}`} className={`card row ${selected ? 'pill-you' : ''}`} style={{ alignItems: 'center' }}>
                   {/* name */}

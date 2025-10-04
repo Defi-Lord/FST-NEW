@@ -81,17 +81,11 @@ const Ctx = createContext<AppState | null>(null)
 export function AppProvider({ children }: { children: React.ReactNode }) {
   // profile
   const [fullName, setFullNameState] = useState<string>(() => lsGet('full_name') || '')
-  const setFullName = (name: string) => {
-    setFullNameState(name)
-    lsSet('full_name', name)
-  }
+  const setFullName = (name: string) => { setFullNameState(name); lsSet('full_name', name) }
 
   // wallet
   const [walletAddress, setWalletAddressState] = useState<string | null>(() => lsGet('sol_wallet'))
-  const setWalletAddress = (addr: string | null) => {
-    setWalletAddressState(addr)
-    lsSet('sol_wallet', addr)
-  }
+  const setWalletAddress = (addr: string | null) => { setWalletAddressState(addr); lsSet('sol_wallet', addr) }
 
   // which world are we in?
   const [realm, setRealm] = useState<ContestRealm>('free')
@@ -117,13 +111,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const addPlayer: AppState['addPlayer'] = (p) => {
     const squadSizeLimit = rules.players
-    // prevent duplicates
     if (team.some(tp => idEq(tp.id, p.id))) return false
-    // squad cap (realm-specific)
     if (team.length >= squadSizeLimit) return false
-    // budget check
     if (budget < p.price) return false
-    // position cap
     const posCount = team.filter(tp => tp.position === p.position).length
     if (posCount >= MAX_PER_POSITION[p.position]) return false
 

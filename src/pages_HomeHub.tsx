@@ -4,7 +4,7 @@ import { useApp } from './state'
 import TopBar from './components_TopBar'
 import MenuDrawer from './components/menu-drawer'
 import { fetchFixtures, fetchBootstrap, fetchElementSummary } from './api'
-import JoinContestBar from './components_JoinContestBar' // animated CTA
+import JoinContestBar from './components_JoinContestBar'
 
 type Props = {
   onViewTeam?: () => void
@@ -23,6 +23,14 @@ type Props = {
 
 type LbEntry = { name: string; points: number }
 
+class AbortSignalController {
+  private controller = new AbortController()
+  private timer: any
+  constructor(ms: number) { this.timer = setTimeout(() => this.controller.abort('timeout'), ms) }
+  get signal() { return this.controller.signal }
+  clear() { clearTimeout(this.timer) }
+}
+
 async function loadLeaderboardPreview(timeoutMs = 7000): Promise<LbEntry[] | null> {
   const ctrl = new AbortSignalController(timeoutMs)
   try {
@@ -32,14 +40,6 @@ async function loadLeaderboardPreview(timeoutMs = 7000): Promise<LbEntry[] | nul
     return Array.isArray(arr) ? arr.slice(0, 3) : null
   } catch { return null }
   finally { ctrl.clear() }
-}
-
-class AbortSignalController {
-  private controller = new AbortController()
-  private timer: any
-  constructor(ms: number) { this.timer = setTimeout(() => this.controller.abort('timeout'), ms) }
-  get signal() { return this.controller.signal }
-  clear() { clearTimeout(this.timer) }
 }
 
 function formatLocal(dtIso: string) {
@@ -127,10 +127,9 @@ export default function HomeHub({
   const handleTransfers  = onTransfers ?? (() => alert('Transfers coming soon'))
   const handleFixtures   = onFixtures ?? (() => alert('Fixtures coming soon'))
   const handleStats      = onStats ?? (() => alert('Stats coming soon'))
-  const handleJoin       = onJoinContest ?? (() => alert('Join contest coming soon')) // unified handler
+  const handleJoin       = onJoinContest ?? (() => alert('Join contest coming soon'))
   const handleLb         = onLeaderboard ?? (() => alert('Leaderboard coming soon'))
   const handleTop10      = onTop10 ?? (() => alert('Top 10 coming soon'))
-
   const goHowToPlay = onHowToPlay ?? (() => alert('How to Play'))
   const goAboutUs   = onAboutUs   ?? (() => alert('About Us'))
   const goContact   = onContactUs ?? (() => alert('Contact Us'))
@@ -183,7 +182,7 @@ export default function HomeHub({
     })()
     return () => { mounted = false }
   }, [round, team])
-  /* === end weekly points state/effects === */
+  /* === end weekly points === */
 
   return (
     <div className="screen">
@@ -220,7 +219,7 @@ export default function HomeHub({
           <div className="subtle">{fullName}</div>
         </div>
 
-        {/* 🔥 Animated JOIN CONTEST bar */}
+        {/* JOIN CONTEST bar (free realm only) */}
         {realm === 'free' && (
           <div style={{ margin: '10px 0 14px' }}>
             <JoinContestBar onClick={handleJoin} />
@@ -268,11 +267,8 @@ export default function HomeHub({
                 <div style={{fontWeight:900, fontSize:18}}>{fixture.home} vs {fixture.away}</div>
                 <div className="subtle">{formatLocal(fixture.kickoff_utc)}</div>
                 {(() => {
-                  const { count } = (() => {
-                    const clubs = new Set([fixture.home, fixture.away])
-                    const c = team.filter(p => clubs.has(p.club)).length
-                    return { count: c }
-                  })()
+                  const clubs = new Set([fixture.home, fixture.away])
+                  const count = team.filter(p => clubs.has(p.club)).length
                   return count > 0 ? <div className="chip" style={{marginTop:10}}>{count} of your player{count === 1 ? '' : 's'} will play</div> : null
                 })()}
               </div>
@@ -378,9 +374,9 @@ export default function HomeHub({
         open={menuOpen}
         onClose={() => setMenuOpen(false)}
         onHome={() => { onBack?.(); setMenuOpen(false) }}
-        onHowToPlay={() => { goHowToPlay(); setMenuOpen(false) }}
-        onContact={() => { goContact(); setMenuOpen(false) }}
-        onAbout={() => { goAboutUs(); setMenuOpen(false) }}
+        onHowToPlay={() => { (onHowToPlay ?? (() => {}))(); setMenuOpen(false) }}
+        onContact={() => { (onContactUs ?? (() => {}))(); setMenuOpen(false) }}
+        onAbout={() => { (onAboutUs ?? (() => {}))(); setMenuOpen(false) }}
       />
     </div>
   )
