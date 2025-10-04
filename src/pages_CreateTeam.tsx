@@ -4,7 +4,7 @@ import { useApp, type Player, type Position } from './state'
 import TopBar from './components_TopBar'
 import { fetchBootstrap } from './api'
 
-export const __CREATE_TEAM_FILE_ID__ = 'CreateTeam.V6.RealmAware+MinPos';
+export const __CREATE_TEAM_FILE_ID__ = 'CreateTeam.V7.RemoveById';
 
 const START_BUDGET = 100.0
 const LIMITS: Record<Position, number> = { GK: 2, DEF: 5, MID: 5, FWD: 3 } // max caps
@@ -136,9 +136,13 @@ export default function CreateTeam({
     if (!v.ok) return alert(v.reason)
     addPlayer(p)
   }
-  const remove = (p: Player) => {
-    try { /* @ts-ignore */ removePlayer?.(p.id) } catch { /* @ts-ignore */ removePlayer?.(p) }
+
+  // ✅ FIX: always remove by ID (type matches removePlayer signature)
+  const removeById = (id: Player['id']) => {
+    removePlayer(id)
   }
+  const remove = (p: Player) => removeById(p.id)
+
   const isSelected = (p: Player) => team.some(s => String(s.id) === String(p.id))
 
   const meetsMinimums =
@@ -278,7 +282,7 @@ export default function CreateTeam({
               {team.map(p => (
                 <div key={`chip-${p.id}`} className="ct-chip" title={p.name}>
                   <span className="ct-chip-text">{shortName(p.name)}</span>
-                  <button className="ct-chip-x" onClick={() => remove(p)} aria-label={`Remove ${p.name}`}>✕</button>
+                  <button className="ct-chip-x" onClick={() => removeById(p.id)} aria-label={`Remove ${p.name}`}>✕</button>
                 </div>
               ))}
             </div>
@@ -335,7 +339,7 @@ export default function CreateTeam({
                     <span className="price">{formatMoney(p.price)}</span>
                     <button
                       className={selected ? 'btn-remove' : 'btn-add'}
-                      onClick={() => (selected ? remove(p) : add(p))}
+                      onClick={() => (selected ? removeById(p.id) : add(p))}
                       disabled={disabled}
                       title={hint}
                     >
@@ -359,7 +363,7 @@ export default function CreateTeam({
                 <div style={{ display:'flex', gap: 8, alignItems:'center', minWidth:0, flex:1 }}>
                   <div className="avatar" />
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', fontSize:'var(--fs-md)' }} title={p.name}>
+                    <div style={{ fontWeight: 700, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', fontSize: 'var(--fs-md)' }} title={p.name}>
                       {shortName(p.name)}
                     </div>
                     <small className="subtle" title={`${p.club} • ${p.position}`}>
@@ -369,7 +373,7 @@ export default function CreateTeam({
                 </div>
                 <div style={{ marginLeft:'auto', display:'flex', gap: 6, alignItems:'center' }}>
                   <span style={{ fontSize:'var(--fs-sm)' }}>{formatMoney(p.price)}</span>
-                  <button className="btn-remove" onClick={() => remove(p)}>Remove</button>
+                  <button className="btn-remove" onClick={() => removeById(p.id)}>Remove</button>
                 </div>
               </li>
             ))}
