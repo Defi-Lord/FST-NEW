@@ -22,23 +22,31 @@ function recomputePoints(team: Player[]): number {
   )
 }
 
-// Optional: load extra leaderboard entries from /leaderboard.json
-async function loadExternalLeaderboard(): Promise<Entry[] | null> {
-  try {
-    const res = await fetch('/leaderboard.json', { cache: 'no-store' })
-    if (!res.ok) return null
-    const arr = await res.json()
-    if (!Array.isArray(arr)) return null
-    // coerce shape
-    return arr
-      .map((x: any) => ({
-        name: String(x?.name ?? 'Anon'),
-        points: Number(x?.points ?? 0),
-      }))
-      .filter((e: Entry) => Number.isFinite(e.points))
-  } catch {
-    return null
+// Try realm-specific leaderboard endpoints with graceful fallback
+async function loadExternalLeaderboard(realm: 'free' | 'weekly' | 'monthly' | 'seasonal'): Promise<Entry[] | null> {
+  const tries = [
+    `/leaderboard_${realm}.json`,
+    `/leaderboard.json?realm=${encodeURIComponent(realm)}`,
+    `/leaderboard.json`,
+  ]
+  for (const url of tries) {
+    try {
+      const res = await fetch(url, { cache: 'no-store' })
+      if (!res.ok) continue
+      const arr = await res.json()
+      if (!Array.isArray(arr)) continue
+      const normalized: Entry[] = arr
+        .map((x: any) => ({
+          name: String(x?.name ?? 'Anon'),
+          points: Number(x?.points ?? 0),
+        }))
+        .filter((e: Entry) => Number.isFinite(e.points))
+      if (normalized.length) return normalized
+    } catch {
+      // ignore and try the next
+    }
   }
+  return null
 }
 
 export default function Leaderboard({
@@ -48,31 +56,29 @@ export default function Leaderboard({
   onNext?: () => void
   onBack: () => void
 }) {
-  const { team, fullName } = useApp()
+  const { team, fullName, realm } = useApp()
   const [external, setExternal] = useState<Entry[] | null>(null)
   const [loading, setLoading] = useState(true)
 
-  // Load external entries (optional)
+  // Load external entries when the realm changes
   useEffect(() => {
     let mounted = true
     ;(async () => {
       setLoading(true)
-      const data = await loadExternalLeaderboard()
+      const data = await loadExternalLeaderboard(realm)
       if (mounted) {
         setExternal(data)
         setLoading(false)
       }
     })()
-    return () => {
-      mounted = false
-    }
-  }, [])
+    return () => { mounted = false }
+  }, [realm])
 
-  // Compute your points from the picked squad
+  // Compute your points from the picked squad (current realm only)
   const yourPoints = useMemo(() => recomputePoints(team), [team])
-  const yourName = fullName?.trim() || 'You'
+  const yourName = (fullName?.trim() || 'You')
 
-  // Build the final table: your row + external rows (if any)
+  // Build the final table: your row + external rows (realm-scoped)
   const table: Entry[] = useMemo(() => {
     const base: Entry[] =
       external && external.length > 0
@@ -84,14 +90,9 @@ export default function Leaderboard({
             { name: 'Jordan', points: 44 },
           ]
 
-    // Insert/replace your row
-    const hasYou = base.some(e => e.you)
     const withoutYou = base.filter(e => !e.you && e.name !== yourName)
-
     const youRow: Entry = { name: yourName, points: yourPoints, you: true }
     const merged = [youRow, ...withoutYou]
-
-    // Sort desc by points
     merged.sort((a, b) => b.points - a.points)
     return merged
   }, [external, yourName, yourPoints])
@@ -115,7 +116,16 @@ export default function Leaderboard({
           }
         />
 
-        {loading && <div className="card subtle" style={{ marginTop: 12 }}>Loading…</div>}
+        {/* subtle realm tag (keeps layout intact) */}
+        <div className="subtle" style={{ marginTop: 6 }}>
+          Showing <strong>{realm === 'free' ? 'Free (Global)' : realm.toUpperCase()}</strong> leaderboard
+        </div>
+
+        {loading && (
+          <div className="card subtle" style={{ marginTop: 12 }}>
+            Loading…
+          </div>
+        )}
 
         {!loading && (
           <div className="list" style={{ marginTop: 12 }}>
