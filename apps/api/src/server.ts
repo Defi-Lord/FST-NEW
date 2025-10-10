@@ -1,4 +1,4 @@
-import express, { Request, Response, RequestHandler } from "express";
+import express, { Request, Response } from "express";
 import helmet from "helmet";
 import cors, { CorsOptions } from "cors";
 import cookieParser from "cookie-parser";
@@ -31,23 +31,22 @@ const PORT = Number(process.env.PORT) || 4000;
 // ---------- App ----------
 const app = express();
 
-app.use(helmet());
-app.use(express.json());
-app.use(cookieParser());
+// Cast middlewares to any to satisfy Express' overloaded .use() typing on some setups
+app.use(helmet() as any);
+app.use(express.json() as any);
+app.use(cookieParser() as any);
 
 // CORS (lock down in prod via CORS_ORIGIN)
 const corsOptions: CorsOptions = {
-  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-    if (!origin) return callback(null, true);            // allow curl/postman
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);              // allow curl/postman
     if (allowed.length === 0) return callback(null, true); // allow all if not set
     if (allowed.includes(origin)) return callback(null, true);
     return callback(new Error("Not allowed by CORS"));
   },
   credentials: true
 };
-// Make TS happy about express' overloaded .use()
-const corsMiddleware: RequestHandler = cors(corsOptions) as unknown as RequestHandler;
-app.use(corsMiddleware);
+app.use(cors(corsOptions) as any);
 
 // ---------- Helpers ----------
 type NonceCookiePayload = {
@@ -70,13 +69,7 @@ function signNonceCookie(payload: { wallet: string; nonce: string; msg: string }
   return { token, jti };
 }
 
-function setCookie(
-  res: Response,
-  name: string,
-  value: string,
-  maxAgeMs: number,
-  options?: any
-) {
+function setCookie(res: Response, name: string, value: string, maxAgeMs: number, options?: any) {
   res.cookie(name, value, {
     httpOnly: true,
     sameSite: "lax",
@@ -167,7 +160,7 @@ app.post("/auth/verify", async (req: Request, res: Response) => {
     const ok = nacl.sign.detached.verify(toBytes(message), sig, pubkey);
     if (!ok) return res.status(401).json({ error: "Invalid signature" });
 
-    // Upsert user + wallet (model names assumed: User, Wallet, Session)
+    // Upsert user + wallet
     let existingWallet = await prisma.wallet?.findFirst?.({
       where: { address: walletAddress },
       select: { id: true, userId: true }
