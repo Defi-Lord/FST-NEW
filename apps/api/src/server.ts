@@ -31,7 +31,7 @@ const PORT = Number(process.env.PORT) || 4000;
 // ---------- App ----------
 const app = express();
 
-// Cast middlewares to any to satisfy Express' overloaded .use() typing on some setups
+// cast to any to bypass Express' overloaded .use() typing differences
 app.use(helmet() as any);
 app.use(express.json() as any);
 app.use(cookieParser() as any);
@@ -89,6 +89,22 @@ function toBytes(str: string): Uint8Array {
 }
 
 // ---------- Routes ----------
+
+// simple root so "/" doesn't 404
+app.get("/", (_req: Request, res: Response) => {
+  res.json({
+    ok: true,
+    name: APP_NAME,
+    message: "API is running",
+    docs: {
+      health: "/public/healthz",
+      nonce: "/auth/nonce?wallet=<BASE58_WALLET>",
+      verify: "POST /auth/verify { walletAddress, signatureBase58 }",
+      me: "GET /me (Authorization: Bearer <token>)"
+    }
+  });
+});
+
 app.get("/public/healthz", (_req: Request, res: Response) => res.json({ ok: true }));
 
 /**
@@ -128,7 +144,7 @@ app.get("/auth/nonce", async (req: Request, res: Response) => {
  * POST /auth/verify
  * Body: { walletAddress: string, signatureBase58: string }
  * Verifies signature over the EXACT message from /auth/nonce.
- * Upserts User + Wallet, creates a Session, returns a 30-day JWT.
+ * Upserts User + Wallet, creates a Session, and returns a 30-day JWT.
  */
 app.post("/auth/verify", async (req: Request, res: Response) => {
   try {
@@ -246,6 +262,11 @@ app.get("/me", async (req: Request, res: Response) => {
     console.error("me error", err);
     return res.status(500).json({ error: "Internal error" });
   }
+});
+
+// Catch-all 404 (JSON)
+app.use((_req: Request, res: Response) => {
+  res.status(404).json({ ok: false, error: "Not Found" });
 });
 
 // ---------- Start ----------
