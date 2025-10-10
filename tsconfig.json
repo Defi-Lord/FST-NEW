@@ -19,5 +19,6 @@
     "paths": {}
   },
   "include": ["src", "src/vite-env.d.ts"],
-  "exclude": ["node_modules", "dist", "src/ui/**"]
+  "exclude": ["node_modules", "dist", "src/ui/**"],
+  "references": [{ "path": "./tsconfig.node.json" }]
 }

@@ -1,0 +1,100 @@
+// prisma/schema.prisma
+// Matches your existing tables so we can `prisma generate` without migrating.
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// NOTE on `realm`:
+// Your SQL shows `realm USER-DEFINED`. We don't know the exact Postgres type.
+// To avoid errors, we store it as plain text here. If you do have a Postgres enum
+// (e.g. CREATE TYPE realm AS ENUM ('FREE','WEEKLY','MONTHLY','SEASONAL')),
+// we can switch this field to a Prisma enum later.
+
+model User {
+  id          String   @id
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime
+  displayName String?
+
+  wallets       Wallet[]
+  sessions      Session[]
+  teams         Team[]
+  contestEntries ContestEntry[]
+
+  @@map("User")
+}
+
+model Wallet {
+  id        String   @id
+  address   String
+  chain     String
+  userId    String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@map("Wallet")
+  @@index([userId])
+}
+
+model Contest {
+  id        String   @id
+  realm     String   @db.Text // USER-DEFINED → treat as text for now
+  title     String
+  entryFee  Int
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  entries ContestEntry[]
+
+  @@map("Contest")
+}
+
+model ContestEntry {
+  id        String   @id
+  userId    String
+  contestId String
+  realm     String   @db.Text
+  joinedAt  DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  contest Contest @relation(fields: [contestId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@map("ContestEntry")
+  @@index([userId])
+  @@index([contestId])
+}
+
+model Session {
+  id        String   @id
+  userId    String
+  jwtId     String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@map("Session")
+  @@index([userId])
+}
+
+model Team {
+  id        String   @id
+  userId    String
+  realm     String   @db.Text
+  squadJson Json
+  points    Float    @default(0)
+  updatedAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@map("Team")
+  @@index([userId])
+}

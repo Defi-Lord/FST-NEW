@@ -1,81 +1,42 @@
-// src/players_loader.ts
-import type { Player, Position } from './state'
+// src/players_loder.ts
+// Tries: VITE_FPL_PROXY_URL -> /fpl/api/bootstrap-static/ -> /mock/bootstrap-static.json.
 
-type FplBootstrap = {
-  elements: Array<{
-    id: number
-    first_name: string
-    second_name: string
-    web_name: string
-    team: number
-    element_type: number
-    now_cost: number // tenths of £m
-    form: string     // "x.y"
-  }>
-  teams: Array<{ id: number; name: string }>
-}
+type Bootstrap = any
 
-const POSITIONS: Record<number, Position> = { 1:'GK', 2:'DEF', 3:'MID', 4:'FWD' }
+const DEV_URL = '/fpl/api/bootstrap-static/'
+const LOCAL_SNAPSHOT_URL = '/mock/bootstrap-static.json'
 
-const PROD_URL = (import.meta as any)?.env?.VITE_FPL_PROXY_URL as string | undefined
-const DEV_URL  = '/fpl/bootstrap-static'
-const LOCAL_SNAPSHOT_URL = '/bootstrap-static.json' // <- put a copy in /public
+const envUrl = import.meta.env.VITE_FPL_PROXY_URL as string | undefined
+const USE_MOCK = import.meta.env.VITE_USE_MOCK === '1'
 
-function pickName(e: FplBootstrap['elements'][number]) {
-  const full = `${e.first_name ?? ''} ${e.second_name ?? ''}`.trim()
-  return e.web_name || full || `#${e.id}`
-}
-function safeParseFloat(x: unknown): number | undefined {
-  const n = typeof x === 'string' ? parseFloat(x) : NaN
-  return Number.isFinite(n) ? n : undefined
-}
-
-function mapFplToPlayers(data: FplBootstrap): Player[] {
-  const teamName = new Map(data.teams.map(t => [t.id, t.name]))
-  const players: Player[] = data.elements.map(e => ({
-    id: String(e.id),
-    name: pickName(e),
-    club: teamName.get(e.team) ?? 'Unknown',
-    position: POSITIONS[e.element_type] ?? 'MID',
-    price: +(e.now_cost / 10).toFixed(1),
-    form: safeParseFloat(e.form),
-  }))
-  players.sort((a,b) => (b.form ?? 0) - (a.form ?? 0))
-  return players
-}
-
-async function tryFetch(url: string) {
-  try { return await fetch(url, { cache: 'no-store' }) } catch { return null }
-}
-async function tryLoad(url: string): Promise<Player[] | null> {
-  const res = await tryFetch(url)
-  if (!res?.ok) return null
+async function fetchJSON<T>(url: string): Promise<T | null> {
   try {
-    const json = await res.json() as FplBootstrap
-    if (!Array.isArray(json?.elements) || json.elements.length < 50) return null
-    return mapFplToPlayers(json)
-  } catch { return null }
+    const r = await fetch(url, { cache: 'no-store' })
+    if (!r.ok) return null
+    return (await r.json()) as T
+  } catch {
+    return null
+  }
 }
 
-/**
- * Tries: VITE_FPL_PROXY_URL -> /fpl/bootstrap-static -> /bootstrap-static.json.
- * Returns null only if all fail (so caller can use SAMPLE_PLAYERS).
- */
-export async function loadPlayers(): Promise<Player[] | null> {
-  // 1) production relay (if provided)
-  if (PROD_URL) {
-    const p = await tryLoad(PROD_URL)
-    if (p) { console.log('Loaded players via PROD relay:', p.length); return p }
+export async function loadPlayersLoder(): Promise<Bootstrap | null> {
+  // 1) env
+  if (envUrl) {
+    const u = envUrl.replace(/\/+$/, '')
+    const data = await fetchJSON<Bootstrap>(u)
+    if (data) return data
   }
-  // 2) dev proxy
-  const d = await tryLoad(DEV_URL)
-  if (d) { console.log('Loaded players via DEV proxy:', d.length); return d }
 
-  // 3) local snapshot (ship a copy in /public to guarantee fullness)
-  const l = await tryLoad(LOCAL_SNAPSHOT_URL)
-  if (l) { console.log('Loaded players via local snapshot:', l.length); return l }
+  // 2) dev proxy (unless forced mock)
+  if (!USE_MOCK) {
+    const data = await fetchJSON<Bootstrap>(DEV_URL)
+    if (data) return data
+  }
 
-  // 4) final failure
-  console.warn('FPL load failed (prod, dev, local snapshot). Falling back to SAMPLE.')
+  // 3) local
+  const local = await fetchJSON<Bootstrap>(LOCAL_SNAPSHOT_URL)
+  if (local) return local
+
+  console.warn('[players_loder] Could not load bootstrap-static from any source.')
   return null
 }

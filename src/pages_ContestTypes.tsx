@@ -58,11 +58,10 @@ function getProvider(): any | null {
   return null
 }
 
-/** ALWAYS load SPL-Token from CDN so no npm install is required. */
+/** Load SPL-Token via Vite-friendly dynamic import (no CDN). */
 async function getSpl() {
-  const cdn = 'https://esm.sh/@solana/spl-token@0.4.7?bundle'
-  // @vite-ignore
-  const m = await import(cdn)
+  // Vite can analyze literal module ids; no warning
+  const m = await import('@solana/spl-token')
   return m
 }
 

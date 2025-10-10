@@ -1,0 +1,158 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Realm {
+  FREE
+  WEEKLY
+  MONTHLY
+  SEASONAL
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+model User {
+  id            String   @id @default(cuid())
+  walletAddress String   @unique
+  role          Role     @default(USER)
+  createdAt     DateTime @default(now())
+  banned        Boolean  @default(false)
+
+  // sessions & security
+  lastLoginAt   DateTime?
+  nonces        Nonce[]
+
+  // contest participation
+  entries       Entry[]
+  teams         Team[]
+  transactions  Transaction[]
+  points        UserPoints[]
+
+  audits        AuditLog[] @relation("ActorAudit")
+}
+
+model Nonce {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  value     String   @unique
+  createdAt DateTime @default(now())
+  usedAt    DateTime?
+}
+
+model Contest {
+  id            String   @id @default(cuid())
+  realm         Realm
+  title         String
+  status        String   @default("DRAFT") // DRAFT|OPEN|LOCKED|CLOSED|SETTLED
+  entryFeeLamports BigInt @default(0)
+  playersLimit  Int      // 11/13/15
+  transferPool  Int      // 0/1
+  seasonKey     String?  // optional “2025/26”, etc.
+  startAt       DateTime
+  lockAt        DateTime // entries close, team locks
+  endAt         DateTime
+
+  entries       Entry[]
+  leaderboards  Leaderboard[]
+  createdAt     DateTime @default(now())
+}
+
+model Entry {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  contestId  String
+  contest    Contest  @relation(fields: [contestId], references: [id])
+  paid       Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  // one active team per entry
+  team       Team?
+}
+
+model Team {
+  id         String   @id @default(cuid())
+  entryId    String   @unique
+  entry      Entry    @relation(fields: [entryId], references: [id])
+  realm      Realm
+  players    Json     // array of player IDs
+  reserves   Json?    // for monthly/seasonal (13/15)
+  transfersUsed Int   @default(0)
+  updatedAt  DateTime @updatedAt
+  createdAt  DateTime @default(now())
+}
+
+model UserPoints {
+  id         String   @id @default(cuid())
+  userId     String
+  realm      Realm
+  total      Int      @default(0)
+  updatedAt  DateTime @updatedAt
+
+  @@unique([userId, realm])
+}
+
+model Leaderboard {
+  id         String   @id @default(cuid())
+  contestId  String
+  contest    Contest  @relation(fields: [contestId], references: [id])
+  realm      Realm
+  snapshotAt DateTime @default(now())
+  rows       Json     // [{userId, points, rank, teamPreview}, ...]
+}
+
+model Player {
+  id        String   @id // your canonical player id
+  name      String
+  position  String   // GK/DEF/MID/FWD
+  team      String
+  price     Int      // optional
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+model Fixture {
+  id        String   @id @default(cuid())
+  realm     Realm
+  matchKey  String   // e.g. "ARS-MCI-2025-10-09"
+  kickoff   DateTime
+  status    String   @default("SCHEDULED") // SCHEDULED|LIVE|FINISHED
+}
+
+model EventPoint {
+  id        String   @id @default(cuid())
+  fixtureId String
+  playerId  String
+  points    Int
+  createdAt DateTime @default(now())
+}
+
+model Transaction {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  contestId   String?
+  type        String   // PAYMENT|REFUND|PRIZE|ADJUSTMENT
+  amountLamports BigInt
+  ref         String?  @unique // external payment ref
+  createdAt   DateTime @default(now())
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  actor     User?    @relation("ActorAudit", fields: [actorId], references: [id])
+  action    String   // e.g. "ADMIN_LOCK_CONTEST"
+  target    String?  // contestId/userId/etc
+  payload   Json?
+  createdAt DateTime @default(now())
+  ip        String?
+  ua        String?
+}

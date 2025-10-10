@@ -6,9 +6,13 @@ type Props = {
   onConnected: (address: string) => void
 }
 
-/** Toggle this to require a signature on connect (recommended if you gate access). */
-const SIGN_ON_CONNECT = false
-const SIGNING_MESSAGE = 'Louder App — Verify wallet ownership.\n\nNonce: '
+/** Backend API base (uses Vite env if present, falls back to localhost) */
+const API_BASE =
+  (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_API_BASE) ||
+  'http://localhost:4000'
+
+/** Enforce nonce-sign on connect to get JWT */
+const SIGN_ON_CONNECT = true
 
 declare global {
   interface Window {
@@ -40,14 +44,21 @@ const safeSetSaved = (addr: string | null) => {
     else localStorage.setItem('sol_wallet', addr)
   } catch {}
 }
-
-function toB58(pk: any): string | null {
-  try { return pk?.toBase58?.() ?? null } catch { return null }
+const setJWT = (token: string | null) => {
+  try {
+    if (!token) localStorage.removeItem('fst_jwt')
+    else localStorage.setItem('fst_jwt', token)
+  } catch {}
 }
 
-function makeNonce(): string {
-  const rand = Math.random().toString(36).slice(2, 10)
-  return `${Date.now()}-${rand}`
+function toB58(pk: any): string | null {
+  try { return pk?.toBase58?.() ?? pk?.toString?.() ?? null } catch { return null }
+}
+
+function toBase64(u8: Uint8Array) {
+  let s = ''
+  for (let i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i])
+  return btoa(s)
 }
 
 /** iOS + Phantom helpers */
@@ -58,6 +69,53 @@ const phantomBrowseLink = () => {
   return `https://phantom.app/ul/browse/${encodeURIComponent(url)}`
 }
 
+/** Backend calls */
+async function fetchNonce(walletAddress: string) {
+  const res = await fetch(`${API_BASE}/auth/nonce`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ walletAddress }),
+  })
+  if (!res.ok) throw new Error(`Nonce error: ${res.status}`)
+  return res.json() as Promise<{ nonce: string; message: string }>
+}
+
+async function verifySignature(payload: { walletAddress: string, nonce: string, signature: string }) {
+  const res = await fetch(`${API_BASE}/auth/verify`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    let err = ''
+    try { err = (await res.json()).error } catch {}
+    throw new Error(`Verify failed: ${res.status} ${err}`)
+  }
+  return res.json() as Promise<{ token: string }>
+}
+
+/** Sign + verify flow (server returns the exact message to sign) */
+async function signAndVerify(provider: any, walletAddress: string) {
+  // 1) get nonce + message (message must match server; do not hardcode)
+  const { nonce, message } = await fetchNonce(walletAddress)
+
+  // 2) sign with wallet
+  const enc = new TextEncoder()
+  if (!provider?.signMessage) {
+    throw new Error('This wallet cannot sign messages. Enable "Message signing" in wallet settings.')
+  }
+  // Some wallets return {signature}, others a Uint8Array directly — normalize:
+  const signed = await provider.signMessage(enc.encode(message), 'utf8')
+  const rawSig: Uint8Array =
+    signed?.signature instanceof Uint8Array ? signed.signature : new Uint8Array(signed)
+  const signatureBase64 = toBase64(rawSig)
+
+  // 3) verify with server -> returns JWT
+  const { token } = await verifySignature({ walletAddress, nonce, signature: signatureBase64 })
+  setJWT(token)
+  return token
+}
+
 export default function ConnectWallet({ onBack, onConnected }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [connectingId, setConnectingId] = useState<WalletId | null>(null)
@@ -66,15 +124,15 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
   const [connectedAddr, setConnectedAddr] = useState<string | null>(safeGetSaved())
   const [connectedId, setConnectedId] = useState<WalletId | null>(null)
   const currentProviderRef = useRef<any>(null)
+  const [status, setStatus] = useState<string>('')
 
   const didAuto = useRef(false)
   const listenersRef = useRef<{ [k: string]: (...args: any[]) => void }>({})
 
-  // —— Discover wallets (and give real connect calls)
+  // Discover wallets
   const providers = useMemo<WalletItem[]>(() => {
     const list: WalletItem[] = []
 
-    // Phantom
     const phantom = window.phantom?.solana || (window.solana?.isPhantom ? window.solana : null)
     list.push({
       id: 'phantom',
@@ -94,7 +152,6 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
       },
     })
 
-    // Backpack
     const backpack = window.backpack
     list.push({
       id: 'backpack',
@@ -114,7 +171,6 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
       },
     })
 
-    // Solflare
     const solflare = window.solflare
     list.push({
       id: 'solflare',
@@ -134,7 +190,6 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
       },
     })
 
-    // Exodus
     const exodus = window.exodus?.solana
     list.push({
       id: 'exodus',
@@ -154,7 +209,7 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
       },
     })
 
-    // Wallet Standard “other” (first non-listed wallet)
+    // Wallet Standard “other”
     try {
       const std = window.wallets?.get?.() || []
       const other = std.find((w: any) =>
@@ -187,7 +242,7 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
     setDetectedNote(installed.length ? `Detected: ${installed.join(' • ')}` : 'No wallet detected yet on this device.')
   }, [providers])
 
-  // —— Event wiring for active provider (accountChanged / disconnect)
+  // Provider event wiring
   const attachProviderEvents = (prov: any, walletId: WalletId) => {
     detachProviderEvents()
     currentProviderRef.current = prov
@@ -195,6 +250,7 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
     const onAccount = (pk: any) => {
       const addr = toB58(pk)
       if (!addr) {
+        setJWT(null)
         safeSetSaved(null)
         setConnectedAddr(null)
         setConnectedId(null)
@@ -206,6 +262,7 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
       onConnected(addr)
     }
     const onDisconnect = () => {
+      setJWT(null)
       safeSetSaved(null)
       setConnectedAddr(null)
       setConnectedId(null)
@@ -239,7 +296,7 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
     currentProviderRef.current = null
   }
 
-  // —— Auto: saved OR silent reconnect
+  // Auto reconnect (silent)
   useEffect(() => {
     if (didAuto.current) return
     didAuto.current = true
@@ -247,7 +304,7 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
     const saved = safeGetSaved()
     if (saved) {
       setConnectedAddr(saved)
-      onConnected(saved) // parent: route to HomeHub
+      onConnected(saved)
     }
 
     ;(async () => {
@@ -260,6 +317,18 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
             safeSetSaved(address)
             setConnectedAddr(address)
             setConnectedId(w.id)
+
+            if (SIGN_ON_CONNECT) {
+              try {
+                setStatus('Refreshing session…')
+                await signAndVerify(provider, address)
+              } catch {
+                // ignore; user will sign manually
+              } finally {
+                setStatus('')
+              }
+            }
+
             onConnected(address)
             return
           }
@@ -269,10 +338,11 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providers])
 
-  // —— Core connect flow
+  // Core connect flow
   const onPick = async (w: WalletItem) => {
     setError(null)
     setConnectingId(w.id)
+    setStatus('')
     try {
       // iPhone: open this page inside Phantom first so the approval sheet appears
       if (w.id === 'phantom' && isiOS() && !isPhantomInApp()) {
@@ -281,45 +351,48 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
       }
 
       if (!w.installed) {
-        window.open(w.installUrl!, '_blank', 'noopener,noreferrer')
+        if (w.installUrl) window.open(w.installUrl, '_blank', 'noopener,noreferrer')
         setError(`${w.name} is not installed on this device.`)
         return
       }
 
+      setStatus(`Connecting ${w.name}…`)
       const { address, provider } = await w.connect()
       if (!address || address.length < 32 || address.length > 60) throw new Error('Invalid address returned')
 
       if (SIGN_ON_CONNECT) {
-        const nonce = makeNonce()
-        const message = SIGNING_MESSAGE + nonce
-        const encoded = new TextEncoder().encode(message)
+        setStatus('Verifying ownership…')
         try {
-          await provider?.signMessage?.(encoded, 'utf8')
-          // send {address, nonce, signature} to backend if you add auth
+          await signAndVerify(provider, address)
         } catch (e: any) {
-          throw new Error('Signature was rejected — cannot continue.')
+          throw new Error(e?.message || 'Signature was rejected — cannot continue.')
         }
+      } else {
+        setJWT(null) // no auth session if not signing
       }
 
       attachProviderEvents(provider, w.id)
       safeSetSaved(address)
       setConnectedAddr(address)
       setConnectedId(w.id)
-      onConnected(address) // parent: navigate('/homehub')
+      setStatus('Connected!')
+      onConnected(address)
     } catch (e: any) {
       setError(e?.message || `Failed to connect with ${w.name}`)
     } finally {
       setConnectingId(null)
+      setTimeout(() => setStatus(''), 1200)
     }
   }
 
-  // —— Disconnect
+  // Disconnect
   const onDisconnectClick = async () => {
     try {
       const prov = currentProviderRef.current
       await prov?.disconnect?.()
     } catch {}
     detachProviderEvents()
+    setJWT(null)
     safeSetSaved(null)
     setConnectedAddr(null)
     setConnectedId(null)
@@ -338,7 +411,7 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
 
         <div className="cw-card cw-hero">
           <h1>Connect your Solana wallet</h1>
-          <p>Securely link your real wallet to join contests, receive rewards, and save your progress.</p>
+          <p>Securely link your wallet to join contests, receive rewards, and save your progress.</p>
           <div className="cw-bullets">
             <div>✓ Non-custodial — you keep your keys</div>
             <div>✓ Works with Phantom, Backpack, Solflare, Exodus</div>
@@ -358,7 +431,6 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
           ) : null}
         </div>
 
-        {/* iOS helper: if not inside Phantom, show "Open in Phantom" */}
         {isiOS() && !isPhantomInApp() && (
           <div className="cw-card" style={{ margin: '8px 0', textAlign: 'center' }}>
             <p style={{ margin: 0, opacity: .9 }}>
@@ -396,6 +468,7 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
           ))}
         </div>
 
+        {status && <div className="cw-note subtle">{status}</div>}
         {error && <div className="cw-error">{error}</div>}
 
         <div className="cw-secure subtle">
@@ -410,7 +483,7 @@ export default function ConnectWallet({ onBack, onConnected }: Props) {
 function IconPhantom() {
   return (
     <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden>
-      <circle cx="12" cy="12" r="10" fill="#8b5cf6" />
+      <circle cx="12" cy="12" r="10" />
       <circle cx="9.5" cy="11" r="1.4" fill="#fff" />
       <circle cx="14.5" cy="11" r="1.4" fill="#fff" />
     </svg>
@@ -419,7 +492,7 @@ function IconPhantom() {
 function IconBackpack() {
   return (
     <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden>
-      <rect x="3" y="5" width="18" height="14" rx="4" fill="#22c55e" />
+      <rect x="3" y="5" width="18" height="14" rx="4" />
       <rect x="7" y="8.5" width="10" height="4" rx="2" fill="#fff" />
     </svg>
   )
@@ -427,7 +500,7 @@ function IconBackpack() {
 function IconSolflare() {
   return (
     <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden>
-      <circle cx="12" cy="12" r="10" fill="#f97316" />
+      <circle cx="12" cy="12" r="10" />
       <path d="M12 6l4 6-4 6-4-6 4-6z" fill="#fff" />
     </svg>
   )
@@ -435,7 +508,7 @@ function IconSolflare() {
 function IconExodus() {
   return (
     <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden>
-      <rect x="4" y="4" width="16" height="16" rx="4" fill="#60a5fa" />
+      <rect x="4" y="4" width="16" height="16" rx="4" />
       <path d="M8 8l8 8M16 8l-8 8" stroke="#fff" strokeWidth="1.8" strokeLinecap="round"/>
     </svg>
   )
@@ -443,13 +516,13 @@ function IconExodus() {
 function IconGeneric() {
   return (
     <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden>
-      <circle cx="12" cy="12" r="10" fill="#94a3b8" />
+      <circle cx="12" cy="12" r="10" />
       <path d="M8 12h8M12 8v8" stroke="#fff" strokeWidth="1.6" strokeLinecap="round"/>
     </svg>
   )
 }
 
-/* ---------- Styles (beautiful glow + cards) ---------- */
+/* ---------- Styles (kept from your original, with neutral fills so they match your theme) ---------- */
 function Style() {
   return (
     <style>{`
