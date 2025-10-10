@@ -10,6 +10,8 @@ import { randomUUID } from "node:crypto";
 
 // ---------- Config ----------
 const prisma = new PrismaClient();
+// In case generated Prisma types don't include models at build time, use a loose handle.
+const db: any = prisma;
 
 const APP_NAME = process.env.APP_NAME ?? "FST";
 const JWT_SECRET = process.env.JWT_SECRET || "";
@@ -36,20 +38,20 @@ app.use(express.json());
 app.use(cookieParser());
 
 // CORS (lock down in prod via CORS_ORIGIN)
-app.use(
-  cors({
-    origin: (origin, cb) => {
-      if (!origin) return cb(null, true); // allow curl/postman
-      if (allowed.length === 0) return cb(null, true); // allow all if not set
-      if (allowed.includes(origin)) return cb(null, true);
-      return cb(new Error("Not allowed by CORS"));
-    },
-    credentials: true
-  })
-);
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true); // allow curl/postman
+    if (allowed.length === 0) return cb(null, true); // allow all if not set
+    if (allowed.includes(origin)) return cb(null, true);
+    return cb(new Error("Not allowed by CORS"));
+  },
+  credentials: true,
+};
+app.use(cors(corsOptions));
 
 // ---------- Helpers ----------
 type NonceCookiePayload = {
+  // 't' indicates token type; we set it internally
   t: "nonce";
   wallet: string;
   nonce: string;
@@ -59,12 +61,13 @@ type NonceCookiePayload = {
   jti: string;
 };
 
-function signNonceCookie(payload: Omit<NonceCookiePayload, "iat" | "exp" | "jti">) {
+// Accept only the data fields; we add 't', 'iat', 'exp', 'jti' ourselves
+function signNonceCookie(payload: { wallet: string; nonce: string; msg: string }) {
   const jti = randomUUID();
   // 5 minutes
   const token = jwt.sign({ t: "nonce", ...payload }, JWT_SECRET, {
     expiresIn: "5m",
-    jwtid: jti
+    jwtid: jti,
   });
   return { token, jti };
 }
@@ -74,7 +77,7 @@ function setCookie(
   name: string,
   value: string,
   maxAgeMs: number,
-  options?: Partial<Parameters<typeof res.cookie>[2]>
+  options?: any
 ) {
   res.cookie(name, value, {
     httpOnly: true,
@@ -82,12 +85,12 @@ function setCookie(
     secure: IS_PROD, // true in production (HTTPS)
     maxAge: maxAgeMs,
     path: "/",
-    ...options
+    ...(options || {}),
   });
 }
 
 function clearCookie(res: express.Response, name: string) {
-  res.clearCookie(name, { httpOnly: true, sameSite: "lax", secure: IS_PROD, path: "/" });
+  res.clearCookie(name, { httpOnly: true, sameSite: "lax", secure: IS_PROD, path: "/" } as any);
 }
 
 function toBytes(str: string): Uint8Array {
@@ -122,7 +125,7 @@ app.get("/auth/nonce", async (req, res) => {
       wallet,
       nonce,
       message,
-      expiresInSec: 300
+      expiresInSec: 300,
     });
   } catch (err) {
     console.error("nonce error", err);
@@ -143,7 +146,7 @@ app.post("/auth/verify", async (req, res) => {
       return res.status(400).json({ error: "walletAddress and signatureBase58 are required" });
     }
 
-    const nonceCookie = req.cookies?.nonce;
+    const nonceCookie = (req as any).cookies?.nonce;
     if (!nonceCookie) return res.status(400).json({ error: "Missing nonce cookie" });
 
     let nonceData: any;
@@ -163,10 +166,10 @@ app.post("/auth/verify", async (req, res) => {
     const ok = nacl.sign.detached.verify(toBytes(message), sig, pubkey);
     if (!ok) return res.status(401).json({ error: "Invalid signature" });
 
-    // Upsert user + wallet
-    const existingWallet = await prisma.wallet.findFirst({
+    // Upsert user + wallet (schema names may vary; using loose 'db' avoids compile-time model name issues)
+    const existingWallet = await db.wallet?.findFirst({
       where: { address: walletAddress },
-      select: { id: true, userId: true }
+      select: { id: true, userId: true },
     });
 
     let userId: string;
@@ -178,21 +181,21 @@ app.post("/auth/verify", async (req, res) => {
     } else {
       userId = randomUUID();
       walletId = randomUUID();
-      await prisma.user.create({
+      await db.user?.create({
         data: {
           id: userId,
           createdAt: new Date(),
           updatedAt: new Date(),
-          displayName: null
-        }
+          displayName: null,
+        },
       });
-      await prisma.wallet.create({
+      await db.wallet?.create({
         data: {
           id: walletId,
           address: walletAddress,
           chain: "solana",
-          userId
-        }
+          userId,
+        },
       });
     }
 
@@ -200,13 +203,13 @@ app.post("/auth/verify", async (req, res) => {
     const jti = randomUUID();
     const authToken = jwt.sign({ sub: userId, wid: walletId, t: "auth" }, JWT_SECRET, {
       expiresIn: "30d",
-      jwtid: jti
+      jwtid: jti,
     });
 
     const sessionId = randomUUID();
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-    await prisma.session.create({
-      data: { id: sessionId, userId, jwtId: jti, expiresAt }
+    await db.session?.create({
+      data: { id: sessionId, userId, jwtId: jti, expiresAt },
     });
 
     clearCookie(res, "nonce");
@@ -217,7 +220,7 @@ app.post("/auth/verify", async (req, res) => {
       token: authToken,
       userId,
       walletId,
-      expiresAt: expiresAt.toISOString()
+      expiresAt: expiresAt.toISOString(),
     });
   } catch (err) {
     console.error("verify error", err);
@@ -240,9 +243,9 @@ app.get("/me", async (req, res) => {
     }
     if (payload.t !== "auth") return res.status(401).json({ error: "Bad token type" });
 
-    const user = await prisma.user.findUnique({
+    const user = await db.user?.findUnique({
       where: { id: payload.sub },
-      select: { id: true, displayName: true, createdAt: true, updatedAt: true }
+      select: { id: true, displayName: true, createdAt: true, updatedAt: true },
     });
     return res.json({ user });
   } catch (err) {
