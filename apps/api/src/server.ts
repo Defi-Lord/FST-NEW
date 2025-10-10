@@ -44,7 +44,7 @@ app.use(
       if (allowed.includes(origin)) return cb(null, true);
       return cb(new Error("Not allowed by CORS"));
     },
-    credentials: true,
+    credentials: true
   })
 );
 
@@ -64,7 +64,7 @@ function signNonceCookie(payload: Omit<NonceCookiePayload, "iat" | "exp" | "jti"
   // 5 minutes
   const token = jwt.sign({ t: "nonce", ...payload }, JWT_SECRET, {
     expiresIn: "5m",
-    jwtid: jti,
+    jwtid: jti
   });
   return { token, jti };
 }
@@ -79,10 +79,10 @@ function setCookie(
   res.cookie(name, value, {
     httpOnly: true,
     sameSite: "lax",
-    secure: IS_PROD, // set true in production (HTTPS)
+    secure: IS_PROD, // true in production (HTTPS)
     maxAge: maxAgeMs,
     path: "/",
-    ...options,
+    ...options
   });
 }
 
@@ -106,7 +106,6 @@ app.get("/auth/nonce", async (req, res) => {
     const wallet = String(req.query.wallet || "").trim();
     if (!wallet) return res.status(400).json({ error: "Missing wallet param" });
 
-    // Construct a canonical message. Keep this EXACT for verify.
     const nonce = randomUUID();
     const issuedAt = new Date().toISOString();
     const message =
@@ -116,17 +115,14 @@ app.get("/auth/nonce", async (req, res) => {
       `Issued At: ${issuedAt}\n` +
       `\nBy signing, you prove ownership of this wallet.`;
 
-    // Sign a short-lived cookie holding wallet + nonce + message
     const { token } = signNonceCookie({ wallet, nonce, msg: message });
-
-    // 5 minutes
-    setCookie(res, "nonce", token, 5 * 60 * 1000);
+    setCookie(res, "nonce", token, 5 * 60 * 1000); // 5 minutes
 
     return res.json({
       wallet,
       nonce,
       message,
-      expiresInSec: 300,
+      expiresInSec: 300
     });
   } catch (err) {
     console.error("nonce error", err);
@@ -138,7 +134,7 @@ app.get("/auth/nonce", async (req, res) => {
  * POST /auth/verify
  * Body: { walletAddress: string, signatureBase58: string }
  * Verifies signature over the EXACT message from /auth/nonce.
- * Upserts User + Wallet, creates Session, returns a 30d JWT.
+ * Upserts User + Wallet, creates a Session, returns a 30-day JWT.
  */
 app.post("/auth/verify", async (req, res) => {
   try {
@@ -147,7 +143,6 @@ app.post("/auth/verify", async (req, res) => {
       return res.status(400).json({ error: "walletAddress and signatureBase58 are required" });
     }
 
-    // Read + verify the nonce cookie
     const nonceCookie = req.cookies?.nonce;
     if (!nonceCookie) return res.status(400).json({ error: "Missing nonce cookie" });
 
@@ -163,22 +158,15 @@ app.post("/auth/verify", async (req, res) => {
     }
 
     const message: string = nonceData.msg;
-    // Verify signature
     const sig = bs58.decode(signatureBase58);
     const pubkey = bs58.decode(walletAddress);
     const ok = nacl.sign.detached.verify(toBytes(message), sig, pubkey);
     if (!ok) return res.status(401).json({ error: "Invalid signature" });
 
-    // Upsert user + wallet in DB
-    // Your schema (from your earlier dump) has:
-    // User: { id, createdAt, updatedAt, displayName? }
-    // Wallet: { id, address, chain, userId, createdAt }
-    // We will:
-    // 1) find wallet by address
-    // 2) if not exists, create user + wallet
+    // Upsert user + wallet
     const existingWallet = await prisma.wallet.findFirst({
       where: { address: walletAddress },
-      select: { id: true, userId: true },
+      select: { id: true, userId: true }
     });
 
     let userId: string;
@@ -195,56 +183,41 @@ app.post("/auth/verify", async (req, res) => {
           id: userId,
           createdAt: new Date(),
           updatedAt: new Date(),
-          displayName: null,
-        },
+          displayName: null
+        }
       });
       await prisma.wallet.create({
         data: {
           id: walletId,
           address: walletAddress,
           chain: "solana",
-          userId,
-          // createdAt default is handled by DB
-        },
+          userId
+        }
       });
     }
 
-    // Create a 30-day auth JWT
+    // Create a 30-day auth JWT + Session row
     const jti = randomUUID();
-    const authToken = jwt.sign(
-      {
-        sub: userId,
-        wid: walletId,
-        t: "auth",
-      },
-      JWT_SECRET,
-      { expiresIn: "30d", jwtid: jti }
-    );
+    const authToken = jwt.sign({ sub: userId, wid: walletId, t: "auth" }, JWT_SECRET, {
+      expiresIn: "30d",
+      jwtid: jti
+    });
 
-    // Save a Session row (id, userId, jwtId, expiresAt)
     const sessionId = randomUUID();
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
     await prisma.session.create({
-      data: {
-        id: sessionId,
-        userId,
-        jwtId: jti,
-        expiresAt,
-      },
+      data: { id: sessionId, userId, jwtId: jti, expiresAt }
     });
 
-    // Clear the nonce cookie (single-use)
     clearCookie(res, "nonce");
-
-    // Optionally also set the auth token as HttpOnly cookie (you can keep only header if you prefer)
     setCookie(res, "auth", authToken, 30 * 24 * 60 * 60 * 1000);
 
     return res.json({
       ok: true,
-      token: authToken, // for SPA to store if you prefer localStorage
+      token: authToken,
       userId,
       walletId,
-      expiresAt: expiresAt.toISOString(),
+      expiresAt: expiresAt.toISOString()
     });
   } catch (err) {
     console.error("verify error", err);
@@ -252,7 +225,7 @@ app.post("/auth/verify", async (req, res) => {
   }
 });
 
-// Example of a protected route (Authorization: Bearer <token>)
+// Example protected route (Authorization: Bearer <token>)
 app.get("/me", async (req, res) => {
   try {
     const auth = req.headers.authorization || "";
@@ -269,7 +242,7 @@ app.get("/me", async (req, res) => {
 
     const user = await prisma.user.findUnique({
       where: { id: payload.sub },
-      select: { id: true, displayName: true, createdAt: true, updatedAt: true },
+      select: { id: true, displayName: true, createdAt: true, updatedAt: true }
     });
     return res.json({ user });
   } catch (err) {
