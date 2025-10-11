@@ -1,10 +1,11 @@
 import React, { useCallback, useMemo, useState } from "react";
 
 /**
- * API base:
- * - In production, set VITE_API_BASE to your Render API URL (e.g. https://your-api.onrender.com).
- * - In dev, defaults to http://localhost:4000 if not set.
- * - We DO NOT fall back to window.location.origin in prod (prevents pointing to the frontend by mistake).
+ * API base URL rules:
+ * - In production, you MUST set VITE_API_BASE to your Render API URL
+ *   (e.g. https://your-api.onrender.com).
+ * - In local dev, defaults to http://localhost:4000 if unset.
+ * - We do NOT fall back to window.location.origin in prod (avoids hitting the frontend URL).
  */
 function computeApiBase() {
   const envBase = (import.meta as any)?.env?.VITE_API_BASE as string | undefined;
@@ -17,21 +18,22 @@ function computeApiBase() {
       base = ""; // force explicit config in prod
       if (typeof window !== "undefined") {
         // eslint-disable-next-line no-console
-        console.warn("VITE_API_BASE is not set in production. Set it to your Render API URL in Vercel.");
+        console.warn("VITE_API_BASE is not set in production. Set it to your Render API URL in Vercel → Settings → Env Vars.");
       }
     } else {
       base = "http://localhost:4000";
     }
   }
+
   return base.replace(/\/+$/, "");
 }
 
 const API_BASE = computeApiBase();
 
-/** Helpers */
+/** utils */
 const toBytes = (s: string) => new TextEncoder().encode(s);
 
-/** base58 (no external deps) */
+/** base58 encode (no deps) */
 function base58Encode(bytes: Uint8Array): string {
   const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
   if (bytes.length === 0) return "";
@@ -55,11 +57,11 @@ function base58Encode(bytes: Uint8Array): string {
   return digits.reverse().map((d) => ALPHABET[d]).join("");
 }
 
-/** Phantom (subset) */
+/** Phantom types (subset) */
 type PhantomProvider = {
   isPhantom?: boolean;
-  publicKey?: { toBase58: () => string } | { toString: () => string };
-  connect: (opts?: any) => Promise<{ publicKey: { toBase58: () => string } | { toString: () => string } }>;
+  publicKey?: { toBase58?: () => string; toString?: () => string };
+  connect: (opts?: any) => Promise<{ publicKey: { toBase58?: () => string; toString?: () => string } }>;
   disconnect?: () => Promise<void>;
   signMessage?: (message: Uint8Array, displayEncoding?: string) => Promise<{ signature: Uint8Array }>;
 };
@@ -79,7 +81,7 @@ type Status =
   | { kind: "success"; userId: string; token?: string }
   | { kind: "error"; message: string };
 
-export default function Page_SignInWithSolana() {
+export default function SignInWithSolanaPage() {
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [address, setAddress] = useState<string>("");
 
@@ -87,12 +89,12 @@ export default function Page_SignInWithSolana() {
 
   const connectWallet = useCallback(async (): Promise<string> => {
     if (!phantom || !phantom.connect) {
-      throw new Error("Phantom wallet not found. Install the Phantom extension/app and refresh.");
+      throw new Error("Phantom wallet not found. Install Phantom and refresh.");
     }
     setStatus({ kind: "connecting" });
     const res = await phantom.connect({ onlyIfTrusted: false });
     const pkAny = res?.publicKey as any;
-    const pub =
+    const pub: string =
       (pkAny?.toBase58?.() as string | undefined) ??
       (pkAny?.toString?.() as string | undefined) ??
       "";
@@ -109,26 +111,28 @@ export default function Page_SignInWithSolana() {
 
       const wallet = address || (await connectWallet());
 
-      // 1) Nonce + message (sets HttpOnly nonce cookie)
+      // 1) GET /auth/nonce (sets HttpOnly nonce cookie)
       setStatus({ kind: "gettingNonce" });
-      const nonceUrl = `${API_BASE}/auth/nonce?wallet=${encodeURIComponent(wallet)}`;
-      const nonceRes = await fetch(nonceUrl, { method: "GET", credentials: "include" });
+      const nonceRes = await fetch(`${API_BASE}/auth/nonce?wallet=${encodeURIComponent(wallet)}`, {
+        method: "GET",
+        credentials: "include",
+      });
       if (!nonceRes.ok) {
         const err = await safeJson(nonceRes);
         throw new Error(err?.error || `Nonce request failed (${nonceRes.status})`);
       }
-      const { message } = (await nonceRes.json()) as { message: string; expiresInSec: number };
-      if (!message) throw new Error("Nonce response missing message to sign.");
+      const { message } = (await nonceRes.json()) as { message: string };
+      if (!message) throw new Error("Server did not return a signing message.");
 
       // 2) Sign exact message
       if (!phantom?.signMessage) {
-        throw new Error("Phantom `signMessage` not available. Enable ‘Message Signing’ in Phantom → Settings → Developer.");
+        throw new Error("Phantom `signMessage` unavailable. Enable Message Signing in Phantom (Settings → Developer).");
       }
       setStatus({ kind: "signing" });
-      const { signature } = await phantom.signMessage!(toBytes(message), "utf8");
+      const { signature } = await phantom.signMessage(toBytes(message), "utf8");
       const signatureBase58 = base58Encode(signature);
 
-      // 3) Verify signature (returns JWT + sets auth cookie if enabled)
+      // 3) POST /auth/verify (returns JWT + sets auth cookie if server does that)
       setStatus({ kind: "verifying" });
       const verifyRes = await fetch(`${API_BASE}/auth/verify`, {
         method: "POST",
@@ -141,14 +145,14 @@ export default function Page_SignInWithSolana() {
         throw new Error(err?.error || `Verify failed (${verifyRes.status})`);
       }
       const data = (await verifyRes.json()) as {
-        ok: boolean;
+        ok: true;
         token?: string;
         userId: string;
         walletId: string;
         expiresAt?: string;
       };
 
-      // Optional: store token for Authorization header flows
+      // Optional: keep JWT for Authorization header flows
       if (data.token && typeof window !== "undefined" && window?.localStorage) {
         try {
           window.localStorage.setItem("authToken", data.token);
@@ -178,15 +182,15 @@ export default function Page_SignInWithSolana() {
   const isProd = !!import.meta.env?.PROD;
 
   return (
-    <div style={wrap}>
+    <div style={card}>
       <h2 style={{ marginTop: 0 }}>Sign in with Solana</h2>
 
       {address ? (
-        <p style={{ margin: "8px 0", wordBreak: "break-all" }}>
-          Connected: <strong>{address}</strong>
+        <p style={muted}>
+          Connected: <span style={mono}>{address}</span>
         </p>
       ) : (
-        <p style={{ margin: "8px 0" }}>No wallet connected.</p>
+        <p style={muted}>No wallet connected.</p>
       )}
 
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
@@ -223,8 +227,8 @@ export default function Page_SignInWithSolana() {
             <div>✅ Signed in!</div>
             <div>User ID: {status.userId}</div>
             {status.token && (
-              <div style={{ marginTop: 6, wordBreak: "break-all" }}>
-                JWT: <code>{status.token}</code>
+              <div style={{ marginTop: 6 }}>
+                JWT: <code style={mono}>{status.token}</code>
               </div>
             )}
           </div>
@@ -235,10 +239,10 @@ export default function Page_SignInWithSolana() {
           status.kind === "verifying") && <div>Working…</div>}
       </div>
 
-      {/* Dev-only debug (hidden in production) */}
+      {/* Dev-only debug (hidden in prod) */}
       {!isProd && (
         <p style={{ marginTop: 16, fontSize: 12, opacity: 0.8 }}>
-          Dev: Using API <code>{API_BASE || "(missing VITE_API_BASE)"}</code>. If signing fails, enable{" "}
+          Dev: API = <code style={mono}>{API_BASE || "(missing VITE_API_BASE)"}</code>. If signing fails, enable{" "}
           <em>Message Signing</em> in Phantom (Settings → Developer).
         </p>
       )}
@@ -246,8 +250,8 @@ export default function Page_SignInWithSolana() {
   );
 }
 
-/** --- styles --- */
-const wrap: React.CSSProperties = {
+/** styles */
+const card: React.CSSProperties = {
   maxWidth: 520,
   margin: "24px auto",
   padding: 16,
@@ -270,6 +274,8 @@ const btnSecondary: React.CSSProperties = {
   color: "#111",
   cursor: "pointer",
 };
+const mono: React.CSSProperties = { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", wordBreak: "break-all" };
+const muted: React.CSSProperties = { margin: "8px 0", color: "#6b7280" };
 const errorBox: React.CSSProperties = {
   background: "rgba(255,0,0,0.08)",
   border: "1px solid rgba(255,0,0,0.3)",
@@ -285,7 +291,7 @@ const okBox: React.CSSProperties = {
   borderRadius: 8,
 };
 
-/** Safe JSON parse for error bodies */
+/** Safe JSON parse from fetch error bodies */
 async function safeJson(r: Response) {
   try {
     return await r.json();
