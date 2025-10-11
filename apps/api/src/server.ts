@@ -1,4 +1,3 @@
-// src/server.ts
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
@@ -100,7 +99,7 @@ app.get('/auth/nonce', (req, res) => {
 
   const nonce = crypto.randomUUID();
 
-  // Cross-site cookie (best practice). Some browsers may block — the JSON fallback handles it.
+  // Cross-site cookie (best practice). Some browsers may block — JSON fallback handles it.
   res.cookie('nonce', nonce, {
     httpOnly: true,
     secure: true,
@@ -160,7 +159,7 @@ app.post('/auth/verify', (req, res) => {
   // Issue JWT
   const token = signJwt(walletAddress);
 
-  // (Optional) Also set an auth cookie for same-site API usage (your SPA uses localStorage too)
+  // (Optional) Also set an auth cookie for same-site API usage (SPA uses localStorage too)
   res.cookie('auth', token, {
     httpOnly: true,
     secure: true,
