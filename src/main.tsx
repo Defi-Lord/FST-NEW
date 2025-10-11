@@ -28,6 +28,7 @@ import HistoryPage from './pages_History'
 import Transfers from './pages_Transfers'      // ✅ NEW
 import Profile from './pages_Profile'          // ✅ NEW
 import './styles/menu-drawer.css'
+import './polyfills';
 
 import { ConnectionProvider, WalletProvider, useWallet } from '@solana/wallet-adapter-react'
 import { PhantomWalletAdapter } from '@solana/wallet-adapter-wallets'
