@@ -1,12 +1,8 @@
 import React from "react";
 
-/**
- * This page is self-contained and includes the working sign-in component inline.
- * If you already have a router that displays this page at /connect or /signin,
- * this will ensure the new flow is actually used.
- */
+// Build stamp so you can SEE the new deploy
+const BUILD = "18:10";
 
-// === Begin: Sign-in component (same as the working one) ===
 const API_BASE = ((import.meta as any)?.env?.VITE_API_BASE as string | undefined)?.replace(/\/+$/, "") ?? "";
 const toBytes = (s: string) => new TextEncoder().encode(s);
 
@@ -64,7 +60,7 @@ function withHint(message: string, hint?: string) {
 }
 async function safeJson(r: Response) { try { return await r.json(); } catch { return undefined; } }
 
-function SignInWithWallet() {
+export default function ConnectWalletPage() {
   const [status, setStatus] = React.useState<Status>({ kind: "idle" });
   const [address, setAddress] = React.useState("");
   const [nonce, setNonce] = React.useState<string | null>(null);
@@ -168,7 +164,7 @@ function SignInWithWallet() {
   return (
     <div style={pageWrap}>
       <div style={card}>
-        <h1 style={title}>Sign in with Solana</h1>
+        <h1 style={title}>Sign in with Solana • build {BUILD}</h1>
         <p style={subtitle}>Secure sign in using your Phantom wallet.</p>
 
         {!address ? (
@@ -243,9 +239,3 @@ const errBox: React.CSSProperties = { background: "rgba(255,0,0,0.08)", border: 
 const okBox: React.CSSProperties = { background: "rgba(0,180,0,0.08)", border: "1px solid rgba(0,180,0,0.35)", color: "#9effc6", padding: 10, borderRadius: 10 };
 const note: React.CSSProperties = { marginTop: 10, fontSize: 12, opacity: 0.8 };
 const devBox: React.CSSProperties = { marginTop: 14, padding: "8px 10px", borderRadius: 10, border: "1px dashed rgba(255,255,255,.2)", opacity: 0.85 };
-
-// === End: Sign-in component ===
-
-export default function ConnectWalletPage() {
-  return <SignInWithWallet />;
-}

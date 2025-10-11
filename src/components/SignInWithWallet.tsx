@@ -152,6 +152,7 @@ export default function SignInWithWallet() {
       if (ok?.token) {
         try {
           window.localStorage?.setItem("authToken", ok.token);
+          window.localStorage?.setItem("auth_token", ok.token);
         } catch {}
       }
 

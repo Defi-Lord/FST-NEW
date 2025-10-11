@@ -24,7 +24,7 @@ const ALLOWED = RAW_ORIGINS
   .map((s) => s.trim().replace(/\/+$/, ''))
   .filter(Boolean);
 
-function originAllowed(origin) {
+function originAllowed(origin: string | undefined) {
   if (!origin) return false;
   for (const pat of ALLOWED) {
     if (pat.includes('*')) {
@@ -44,7 +44,7 @@ app.use(express.json());
 app.use(cookieParser());
 
 /* --------- CORS (minimal, robust) --------- */
-const corsMiddleware = (req, res, next) => {
+const corsMiddleware = (req: any, res: any, next: any) => {
   const origin = req.headers?.origin;
   if (origin && originAllowed(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
@@ -66,7 +66,7 @@ const te = new TextEncoder();
 const utf8 = (s: string) => te.encode(s);
 const signJwt = (sub: string) => jwt.sign({ sub, app: 'FST' }, JWT_SECRET, { expiresIn: '7d' });
 
-function tokenFromAuth(req) {
+function tokenFromAuth(req: any) {
   const h = req.headers?.authorization || '';
   const m = /^Bearer\s+(.+)$/.exec(h);
   return m ? m[1] : null;
@@ -138,7 +138,7 @@ app.post('/auth/verify', (req, res) => {
     try {
       pubkey = bs58.decode(walletAddress);
       sig = bs58.decode(signatureBase58);
-    } catch (e) {
+    } catch {
       return res.status(400).json({ error: 'Invalid base58 in walletAddress or signatureBase58' });
     }
 
@@ -185,6 +185,6 @@ app.get('/me', (req, res) => {
 
 /* -------------- START -------------- */
 app.listen(PORT, () => {
-  console.log(`FST API listening on :${PORT}`);
+  console.log(`FST API listening on :${PORT} • build 18:10`);
   console.log(`Allowed origins: ${ALLOWED.length ? ALLOWED.join(', ') : '(none set)'}`);
 });
