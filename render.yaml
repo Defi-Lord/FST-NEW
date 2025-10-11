@@ -4,8 +4,9 @@ services:
     env: node
     plan: free
     region: frankfurt
-    buildCommand: cd apps/api && npm install && npm run build
-    startCommand: cd apps/api && npm start
+    rootDir: apps/api
+    buildCommand: npm install --no-audit --no-fund && npm run build
+    startCommand: npm start
     envVars:
       - key: NODE_VERSION
         value: "20"
@@ -14,4 +15,4 @@ services:
       - key: JWT_SECRET
         sync: false
       - key: CORS_ORIGIN
-        value: "https://your-frontend.vercel.app"
+        value: ""

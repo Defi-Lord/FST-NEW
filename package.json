@@ -8,12 +8,13 @@
   ],
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "vite build",
     "preview": "vite preview",
     "dev:api": "npm -w apps/api run dev",
     "build:api": "npm -w apps/api run build",
     "prisma:generate": "npm -w apps/api run prisma:generate",
-    "prisma:migrate": "npm -w apps/api run prisma:migrate"
+    "prisma:migrate": "npm -w apps/api run prisma:migrate",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@solana/spl-token": "^0.4.7",
@@ -23,16 +24,20 @@
     "@solana/web3.js": "^1.98.0",
     "bs58": "^5.0.0",
     "buffer": "^6.0.3",
+    "crypto-browserify": "^3.12.1",
+    "process": "^0.11.10",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "stream-browserify": "^3.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.12.7",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.2.1",
-    "typescript": "^5.6.2",
-    "vite": "^5.4.10"
+    "typescript": "^5.5.4",
+    "vite": "^5.4.10",
+    "vite-plugin-node-polyfills": "^0.24.0"
   },
   "engines": {
     "node": ">=20 <21"

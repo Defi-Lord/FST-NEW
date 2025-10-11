@@ -1,598 +1,241 @@
-// src/pages_ConnectWallet.tsx
-import { useEffect, useMemo, useRef, useState } from 'react'
+import React from "react";
 
-type Props = {
-  onBack?: () => void
-  onConnected: (address: string) => void
+// Build stamp so you can SEE the new deploy
+const BUILD = "18:10";
+
+const API_BASE = ((import.meta as any)?.env?.VITE_API_BASE as string | undefined)?.replace(/\/+$/, "") ?? "";
+const toBytes = (s: string) => new TextEncoder().encode(s);
+
+function base58Encode(bytes: Uint8Array): string {
+  const A = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  if (!bytes.length) return "";
+  let zeros = 0;
+  while (zeros < bytes.length && bytes[zeros] === 0) zeros++;
+  const input = bytes.slice();
+  const digits: number[] = [];
+  for (let i = zeros; i < input.length; i++) {
+    let carry = input[i];
+    for (let j = 0; j < digits.length; j++) {
+      const x = digits[j] * 256 + carry;
+      digits[j] = Math.floor(x / 58);
+      carry = x % 58;
+    }
+    while (carry > 0) {
+      digits.push(carry % 58);
+      carry = Math.floor(carry / 58);
+    }
+  }
+  for (let k = 0; k < zeros; k++) digits.push(0);
+  return digits.reverse().map((d) => A[d]).join("");
 }
 
-/** Backend API base (uses Vite env if present, falls back to localhost) */
-const API_BASE =
-  (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_API_BASE) ||
-  'http://localhost:4000'
-
-/** Enforce nonce-sign on connect to get JWT */
-const SIGN_ON_CONNECT = true
+type PhantomProvider = {
+  isPhantom?: boolean;
+  publicKey?: { toBase58?: () => string; toString?: () => string };
+  connect: (opts?: any) => Promise<{ publicKey: { toBase58?: () => string; toString?: () => string } }>;
+  disconnect?: () => Promise<void>;
+  signMessage?: (message: Uint8Array, displayEncoding?: string) => Promise<{ signature: Uint8Array }>;
+};
 
 declare global {
   interface Window {
-    solana?: any
-    phantom?: { solana?: any }
-    backpack?: any
-    solflare?: any
-    exodus?: { solana?: any }
-    wallets?: { get(): any[] }
+    solana?: PhantomProvider;
+    phantom?: { solana?: PhantomProvider };
   }
 }
 
-type WalletId = 'phantom' | 'backpack' | 'solflare' | 'exodus' | 'other'
-type WalletItem = {
-  id: WalletId
-  name: string
-  icon: JSX.Element
-  installed: boolean
-  connect: (opts?: any) => Promise<{ address: string; provider?: any }>
-  installUrl?: string
-  on?: ((ev: string, fn: (...args: any[]) => void) => void) | undefined
-  off?: ((ev: string, fn: (...args: any[]) => void) => void) | undefined
+type Status =
+  | { kind: "idle" }
+  | { kind: "connecting" }
+  | { kind: "gettingNonce" }
+  | { kind: "signing" }
+  | { kind: "verifying" }
+  | { kind: "success"; userId: string }
+  | { kind: "error"; message: string; hint?: string };
+
+function withHint(message: string, hint?: string) {
+  const e: any = new Error(message);
+  if (hint) e.hint = hint;
+  return e;
 }
+async function safeJson(r: Response) { try { return await r.json(); } catch { return undefined; } }
 
-const safeGetSaved = () => { try { return localStorage.getItem('sol_wallet') } catch { return null } }
-const safeSetSaved = (addr: string | null) => {
-  try {
-    if (!addr) localStorage.removeItem('sol_wallet')
-    else localStorage.setItem('sol_wallet', addr)
-  } catch {}
-}
-const setJWT = (token: string | null) => {
-  try {
-    if (!token) localStorage.removeItem('fst_jwt')
-    else localStorage.setItem('fst_jwt', token)
-  } catch {}
-}
+export default function ConnectWalletPage() {
+  const [status, setStatus] = React.useState<Status>({ kind: "idle" });
+  const [address, setAddress] = React.useState("");
+  const [nonce, setNonce] = React.useState<string | null>(null);
 
-function toB58(pk: any): string | null {
-  try { return pk?.toBase58?.() ?? pk?.toString?.() ?? null } catch { return null }
-}
+  const phantom = React.useMemo<PhantomProvider | undefined>(() => {
+    const w = typeof window !== "undefined" ? (window as any) : undefined;
+    return w?.solana?.isPhantom
+      ? (w.solana as PhantomProvider)
+      : w?.phantom?.solana?.isPhantom
+      ? (w.phantom.solana as PhantomProvider)
+      : undefined;
+  }, []);
 
-function toBase64(u8: Uint8Array) {
-  let s = ''
-  for (let i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i])
-  return btoa(s)
-}
+  const connectWallet = React.useCallback(async (): Promise<string> => {
+    if (!phantom?.connect) throw new Error("Phantom wallet not found. Install Phantom and refresh.");
+    setStatus({ kind: "connecting" });
+    const res = await phantom.connect({ onlyIfTrusted: false });
+    const pk: any = res?.publicKey;
+    const pub =
+      (typeof pk?.toBase58 === "function" && pk.toBase58()) ||
+      (typeof pk?.toString === "function" && pk.toString()) || "";
+    if (!pub) throw new Error("Could not read wallet address from Phantom.");
+    setAddress(pub);
+    return pub;
+  }, [phantom]);
 
-/** iOS + Phantom helpers */
-const isiOS = () => /iPhone|iPad|iPod/i.test(navigator.userAgent)
-const isPhantomInApp = () => !!(window.solana && (window.solana.isPhantom || window.phantom?.solana))
-const phantomBrowseLink = () => {
-  const url = typeof window !== 'undefined' ? window.location.href : ''
-  return `https://phantom.app/ul/browse/${encodeURIComponent(url)}`
-}
+  const fetchNonce = React.useCallback(
+    async (wallet: string): Promise<{ message: string; nonce: string }> => {
+      if (!API_BASE) throw new Error("Missing VITE_API_BASE. Set it in your Vercel env and redeploy.");
+      setStatus({ kind: "gettingNonce" });
+      const url = `${API_BASE}/auth/nonce?wallet=${encodeURIComponent(wallet)}`;
+      const r = await fetch(url, { method: "GET", credentials: "omit" });
+      if (!r.ok) {
+        let hint = "";
+        if (r.status === 400) hint = "Check the wallet address you’re sending.";
+        if (r.status === 403) hint = "Origin not allowed by API CORS_ORIGIN.";
+        const body = await safeJson(r);
+        throw withHint(body?.error || `Nonce request failed (${r.status})`, hint);
+      }
+      const data = (await r.json()) as { wallet: string; nonce: string; message: string };
+      if (!data?.nonce || !data?.message) throw new Error("Nonce response missing required fields.");
+      setNonce(data.nonce);
+      return { message: data.message, nonce: data.nonce };
+    },
+    []
+  );
 
-/** Backend calls */
-async function fetchNonce(walletAddress: string) {
-  const res = await fetch(`${API_BASE}/auth/nonce`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ walletAddress }),
-  })
-  if (!res.ok) throw new Error(`Nonce error: ${res.status}`)
-  return res.json() as Promise<{ nonce: string; message: string }>
-}
-
-async function verifySignature(payload: { walletAddress: string, nonce: string, signature: string }) {
-  const res = await fetch(`${API_BASE}/auth/verify`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-  if (!res.ok) {
-    let err = ''
-    try { err = (await res.json()).error } catch {}
-    throw new Error(`Verify failed: ${res.status} ${err}`)
-  }
-  return res.json() as Promise<{ token: string }>
-}
-
-/** Sign + verify flow (server returns the exact message to sign) */
-async function signAndVerify(provider: any, walletAddress: string) {
-  // 1) get nonce + message (message must match server; do not hardcode)
-  const { nonce, message } = await fetchNonce(walletAddress)
-
-  // 2) sign with wallet
-  const enc = new TextEncoder()
-  if (!provider?.signMessage) {
-    throw new Error('This wallet cannot sign messages. Enable "Message signing" in wallet settings.')
-  }
-  // Some wallets return {signature}, others a Uint8Array directly — normalize:
-  const signed = await provider.signMessage(enc.encode(message), 'utf8')
-  const rawSig: Uint8Array =
-    signed?.signature instanceof Uint8Array ? signed.signature : new Uint8Array(signed)
-  const signatureBase64 = toBase64(rawSig)
-
-  // 3) verify with server -> returns JWT
-  const { token } = await verifySignature({ walletAddress, nonce, signature: signatureBase64 })
-  setJWT(token)
-  return token
-}
-
-export default function ConnectWallet({ onBack, onConnected }: Props) {
-  const [error, setError] = useState<string | null>(null)
-  const [connectingId, setConnectingId] = useState<WalletId | null>(null)
-  const [detectedNote, setDetectedNote] = useState<string | null>(null)
-
-  const [connectedAddr, setConnectedAddr] = useState<string | null>(safeGetSaved())
-  const [connectedId, setConnectedId] = useState<WalletId | null>(null)
-  const currentProviderRef = useRef<any>(null)
-  const [status, setStatus] = useState<string>('')
-
-  const didAuto = useRef(false)
-  const listenersRef = useRef<{ [k: string]: (...args: any[]) => void }>({})
-
-  // Discover wallets
-  const providers = useMemo<WalletItem[]>(() => {
-    const list: WalletItem[] = []
-
-    const phantom = window.phantom?.solana || (window.solana?.isPhantom ? window.solana : null)
-    list.push({
-      id: 'phantom',
-      name: 'Phantom',
-      installed: !!phantom,
-      icon: <IconPhantom />,
-      installUrl: 'https://phantom.app/download',
-      on: phantom?.on?.bind(phantom),
-      off: phantom?.off?.bind(phantom),
-      connect: async (opts?: any) => {
-        const prov = window.phantom?.solana || window.solana
-        if (!prov) throw new Error('Phantom not found')
-        const res = await prov.connect(opts)
-        const addr = toB58(res?.publicKey) || toB58(prov?.publicKey)
-        if (!addr) throw new Error('No public key from Phantom')
-        return { address: addr, provider: prov }
-      },
-    })
-
-    const backpack = window.backpack
-    list.push({
-      id: 'backpack',
-      name: 'Backpack',
-      installed: !!backpack,
-      icon: <IconBackpack />,
-      installUrl: 'https://www.backpack.app/download',
-      on: backpack?.on?.bind(backpack),
-      off: backpack?.off?.bind(backpack),
-      connect: async (opts?: any) => {
-        const prov = window.backpack
-        if (!prov) throw new Error('Backpack not found')
-        const res = await prov.connect(opts)
-        const addr = toB58(res?.publicKey) || toB58(prov?.publicKey)
-        if (!addr) throw new Error('No public key from Backpack')
-        return { address: addr, provider: prov }
-      },
-    })
-
-    const solflare = window.solflare
-    list.push({
-      id: 'solflare',
-      name: 'Solflare',
-      installed: !!solflare,
-      icon: <IconSolflare />,
-      installUrl: 'https://solflare.com/download',
-      on: solflare?.on?.bind(solflare),
-      off: solflare?.off?.bind(solflare),
-      connect: async (opts?: any) => {
-        const prov = window.solflare
-        if (!prov) throw new Error('Solflare not found')
-        const res = await prov.connect(opts)
-        const addr = toB58(res?.publicKey) || toB58(prov?.publicKey)
-        if (!addr) throw new Error('No public key from Solflare')
-        return { address: addr, provider: prov }
-      },
-    })
-
-    const exodus = window.exodus?.solana
-    list.push({
-      id: 'exodus',
-      name: 'Exodus',
-      installed: !!exodus,
-      icon: <IconExodus />,
-      installUrl: 'https://www.exodus.com/download/',
-      on: exodus?.on?.bind(exodus),
-      off: exodus?.off?.bind(exodus),
-      connect: async (opts?: any) => {
-        const prov = window.exodus?.solana
-        if (!prov) throw new Error('Exodus not found')
-        const res = await prov.connect(opts)
-        const addr = toB58(res?.publicKey) || toB58(prov?.publicKey)
-        if (!addr) throw new Error('No public key from Exodus')
-        return { address: addr, provider: prov }
-      },
-    })
-
-    // Wallet Standard “other”
+  const signIn = React.useCallback(async () => {
     try {
-      const std = window.wallets?.get?.() || []
-      const other = std.find((w: any) =>
-        !['phantom','backpack','solflare','exodus'].some(k => (w.name || '').toLowerCase().includes(k))
-      )
-      if (other) {
-        list.push({
-          id: 'other',
-          name: other.name || 'Solana Wallet',
-          installed: true,
-          icon: <IconGeneric />,
-          on: other?.on?.bind(other),
-          off: other?.off?.bind(other),
-          connect: async (opts?: any) => {
-            const r = await (other as any).connect(opts)
-            const addr = toB58(r?.publicKey) || toB58((other as any)?.publicKey)
-            if (!addr) throw new Error('No public key from wallet')
-            return { address: addr, provider: other }
-          },
-        })
+      const wallet = address || (await connectWallet());
+      const { message, nonce: n } = await fetchNonce(wallet);
+
+      if (!phantom?.signMessage) {
+        throw withHint(
+          "Phantom `signMessage` not available.",
+          "Open Phantom → Settings → Developer → enable Message Signing."
+        );
       }
-    } catch {}
+      setStatus({ kind: "signing" });
+      const { signature } = await phantom.signMessage!(toBytes(message), "utf8");
+      const signatureBase58 = base58Encode(signature);
 
-    return list
-  }, [])
-
-  // UI note
-  useEffect(() => {
-    const installed = providers.filter(p => p.installed).map(p => p.name)
-    setDetectedNote(installed.length ? `Detected: ${installed.join(' • ')}` : 'No wallet detected yet on this device.')
-  }, [providers])
-
-  // Provider event wiring
-  const attachProviderEvents = (prov: any, walletId: WalletId) => {
-    detachProviderEvents()
-    currentProviderRef.current = prov
-
-    const onAccount = (pk: any) => {
-      const addr = toB58(pk)
-      if (!addr) {
-        setJWT(null)
-        safeSetSaved(null)
-        setConnectedAddr(null)
-        setConnectedId(null)
-        return
-      }
-      safeSetSaved(addr)
-      setConnectedAddr(addr)
-      setConnectedId(walletId)
-      onConnected(addr)
-    }
-    const onDisconnect = () => {
-      setJWT(null)
-      safeSetSaved(null)
-      setConnectedAddr(null)
-      setConnectedId(null)
-    }
-    const onConnect = (args?: any) => {
-      const addr = toB58(args?.publicKey) || toB58(prov?.publicKey)
-      if (addr) {
-        safeSetSaved(addr)
-        setConnectedAddr(addr)
-        setConnectedId(walletId)
-        onConnected(addr)
-      }
-    }
-
-    listenersRef.current = { onAccount, onDisconnect, onConnect }
-    prov?.on?.('accountChanged', onAccount)
-    prov?.on?.('disconnect', onDisconnect)
-    prov?.on?.('connect', onConnect)
-  }
-
-  const detachProviderEvents = () => {
-    const prov = currentProviderRef.current
-    if (!prov) return
-    try {
-      const L = listenersRef.current
-      prov?.off?.('accountChanged', L.onAccount)
-      prov?.off?.('disconnect', L.onDisconnect)
-      prov?.off?.('connect', L.onConnect)
-    } catch {}
-    listenersRef.current = {}
-    currentProviderRef.current = null
-  }
-
-  // Auto reconnect (silent)
-  useEffect(() => {
-    if (didAuto.current) return
-    didAuto.current = true
-
-    const saved = safeGetSaved()
-    if (saved) {
-      setConnectedAddr(saved)
-      onConnected(saved)
-    }
-
-    ;(async () => {
-      for (const w of providers) {
-        if (!w.installed) continue
-        try {
-          const { address, provider } = await w.connect({ onlyIfTrusted: true })
-          if (address) {
-            attachProviderEvents(provider, w.id)
-            safeSetSaved(address)
-            setConnectedAddr(address)
-            setConnectedId(w.id)
-
-            if (SIGN_ON_CONNECT) {
-              try {
-                setStatus('Refreshing session…')
-                await signAndVerify(provider, address)
-              } catch {
-                // ignore; user will sign manually
-              } finally {
-                setStatus('')
-              }
-            }
-
-            onConnected(address)
-            return
-          }
-        } catch {}
-      }
-    })()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [providers])
-
-  // Core connect flow
-  const onPick = async (w: WalletItem) => {
-    setError(null)
-    setConnectingId(w.id)
-    setStatus('')
-    try {
-      // iPhone: open this page inside Phantom first so the approval sheet appears
-      if (w.id === 'phantom' && isiOS() && !isPhantomInApp()) {
-        window.location.href = phantomBrowseLink()
-        return
-      }
-
-      if (!w.installed) {
-        if (w.installUrl) window.open(w.installUrl, '_blank', 'noopener,noreferrer')
-        setError(`${w.name} is not installed on this device.`)
-        return
-      }
-
-      setStatus(`Connecting ${w.name}…`)
-      const { address, provider } = await w.connect()
-      if (!address || address.length < 32 || address.length > 60) throw new Error('Invalid address returned')
-
-      if (SIGN_ON_CONNECT) {
-        setStatus('Verifying ownership…')
-        try {
-          await signAndVerify(provider, address)
-        } catch (e: any) {
-          throw new Error(e?.message || 'Signature was rejected — cannot continue.')
+      setStatus({ kind: "verifying" });
+      const verifyRes = await fetch(`${API_BASE}/auth/verify`, {
+        method: "POST",
+        credentials: "omit",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ walletAddress: wallet, signatureBase58, nonce: n }),
+      });
+      if (!verifyRes.ok) {
+        const body = await safeJson(verifyRes);
+        const msg = body?.error || `Verify failed: HTTP ${verifyRes.status}`;
+        let hint = "";
+        if (verifyRes.status === 400 && /nonce/i.test(msg)) {
+          hint = "Frontend must include the nonce returned by /auth/nonce in the verify body.";
         }
-      } else {
-        setJWT(null) // no auth session if not signing
+        throw withHint(msg, hint);
       }
-
-      attachProviderEvents(provider, w.id)
-      safeSetSaved(address)
-      setConnectedAddr(address)
-      setConnectedId(w.id)
-      setStatus('Connected!')
-      onConnected(address)
+      const ok = (await verifyRes.json()) as { ok: boolean; userId: string; token?: string };
+      if (ok?.token) {
+        try { window.localStorage?.setItem("authToken", ok.token); } catch {}
+      }
+      setStatus({ kind: "success", userId: ok.userId });
+      window.location.href = "/homehub";
     } catch (e: any) {
-      setError(e?.message || `Failed to connect with ${w.name}`)
-    } finally {
-      setConnectingId(null)
-      setTimeout(() => setStatus(''), 1200)
+      setStatus({ kind: "error", message: e?.message || "Something went wrong", hint: e?.hint });
     }
-  }
+  }, [address, connectWallet, fetchNonce, phantom]);
 
-  // Disconnect
-  const onDisconnectClick = async () => {
-    try {
-      const prov = currentProviderRef.current
-      await prov?.disconnect?.()
-    } catch {}
-    detachProviderEvents()
-    setJWT(null)
-    safeSetSaved(null)
-    setConnectedAddr(null)
-    setConnectedId(null)
-  }
+  const disconnect = React.useCallback(async () => {
+    try { await phantom?.disconnect?.(); } catch {}
+    setAddress(""); setNonce(null); setStatus({ kind: "idle" });
+  }, [phantom]);
+
+  const disabled =
+    status.kind === "connecting" || status.kind === "gettingNonce" ||
+    status.kind === "signing" || status.kind === "verifying";
+
+  const isProd = !!import.meta.env?.PROD;
 
   return (
-    <div className="screen">
-      <Style />
+    <div style={pageWrap}>
+      <div style={card}>
+        <h1 style={title}>Sign in with Solana • build {BUILD}</h1>
+        <p style={subtitle}>Secure sign in using your Phantom wallet.</p>
 
-      <div className="cw-wrap">
-        <div className="cw-top">
-          {onBack && <button className="cw-back" onClick={onBack} aria-label="Back">←</button>}
-          <h2 className="cw-title">Connect Wallet</h2>
-          <div style={{ width: 36 }} />
-        </div>
-
-        <div className="cw-card cw-hero">
-          <h1>Connect your Solana wallet</h1>
-          <p>Securely link your wallet to join contests, receive rewards, and save your progress.</p>
-          <div className="cw-bullets">
-            <div>✓ Non-custodial — you keep your keys</div>
-            <div>✓ Works with Phantom, Backpack, Solflare, Exodus</div>
-            <div>✓ One-tap reconnect next time</div>
-          </div>
-
-          {connectedAddr ? (
-            <div className="cw-connected">
-              <div className="addr-tag">
-                Connected as <strong>{connectedAddr.slice(0,6)}…{connectedAddr.slice(-4)}</strong>
-              </div>
-              <div className="connected-actions">
-                <button onClick={() => { navigator.clipboard?.writeText(connectedAddr) }}>Copy Address</button>
-                <button onClick={onDisconnectClick}>Disconnect</button>
-              </div>
+        {!address ? (
+          <button onClick={connectWallet} disabled={disabled} style={btnPrimary}>
+            {status.kind === "connecting" ? "Connecting…" : "Connect Phantom"}
+          </button>
+        ) : (
+          <>
+            <div style={pill}>
+              <div style={{ fontSize: 12, opacity: 0.8 }}>Wallet</div>
+              <div style={mono}>{address}</div>
             </div>
-          ) : null}
-        </div>
-
-        {isiOS() && !isPhantomInApp() && (
-          <div className="cw-card" style={{ margin: '8px 0', textAlign: 'center' }}>
-            <p style={{ margin: 0, opacity: .9 }}>
-              On iPhone, connecting works best inside the Phantom app.
-            </p>
-            <a
-              href={phantomBrowseLink()}
-              className="btn"
-              style={{
-                display:'inline-block', marginTop:8, padding:'10px 14px',
-                borderRadius:12, border:'1px solid rgba(255,255,255,0.2)'
-              }}
-            >
-              Open this page in Phantom
-            </a>
-          </div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button onClick={disconnect} disabled={disabled} style={btnMuted}>Disconnect</button>
+              <button onClick={signIn} disabled={disabled} style={btnPrimary}>
+                {status.kind === "gettingNonce" ? "Getting nonce…" :
+                 status.kind === "signing" ? "Signing…" :
+                 status.kind === "verifying" ? "Verifying…" : "Sign In"}
+              </button>
+            </div>
+          </>
         )}
 
-        {detectedNote && <div className="cw-note subtle">{detectedNote}</div>}
-
-        <div className="cw-grid">
-          {providers.map(w => (
-            <button
-              key={w.id}
-              className={`cw-wallet ${w.installed ? 'is-live' : 'is-ghost'} ${connectingId === w.id ? 'is-loading' : ''}`}
-              onClick={() => onPick(w)}
-            >
-              <span className="cw-icon">{w.icon}</span>
-              <span className="cw-meta">
-                <span className="cw-name">{w.name}</span>
-                <span className="cw-sub">{w.installed ? 'Connect' : 'Get'}</span>
-              </span>
-              <span className="cw-chevron">→</span>
-            </button>
-          ))}
+        <div style={{ minHeight: 20, marginTop: 12 }}>
+          {status.kind === "error" && (
+            <div style={errBox}>
+              <div><strong>Auth error:</strong> {status.message}</div>
+              {status.hint && <div style={{ opacity: 0.9, marginTop: 6 }}>{status.hint}</div>}
+            </div>
+          )}
+          {status.kind === "success" && <div style={okBox}>✅ Signed in!</div>}
         </div>
 
-        {status && <div className="cw-note subtle">{status}</div>}
-        {error && <div className="cw-error">{error}</div>}
-
-        <div className="cw-secure subtle">
-          We store only your public wallet address. We never request your seed phrase or private key.
+        <div style={note}>
+          Tip: If you don’t see the wallet popup, click the Phantom icon in your browser toolbar.
         </div>
+
+        {!isProd && (
+          <div style={devBox}>
+            Dev info: API_BASE = <code>{API_BASE || "(missing VITE_API_BASE)"}</code>{" "}
+            {nonce ? <>• nonce=<code>{nonce}</code></> : null}
+          </div>
+        )}
       </div>
     </div>
-  )
+  );
 }
 
-/* ---------- Icons (inline) ---------- */
-function IconPhantom() {
-  return (
-    <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden>
-      <circle cx="12" cy="12" r="10" />
-      <circle cx="9.5" cy="11" r="1.4" fill="#fff" />
-      <circle cx="14.5" cy="11" r="1.4" fill="#fff" />
-    </svg>
-  )
-}
-function IconBackpack() {
-  return (
-    <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden>
-      <rect x="3" y="5" width="18" height="14" rx="4" />
-      <rect x="7" y="8.5" width="10" height="4" rx="2" fill="#fff" />
-    </svg>
-  )
-}
-function IconSolflare() {
-  return (
-    <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden>
-      <circle cx="12" cy="12" r="10" />
-      <path d="M12 6l4 6-4 6-4-6 4-6z" fill="#fff" />
-    </svg>
-  )
-}
-function IconExodus() {
-  return (
-    <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden>
-      <rect x="4" y="4" width="16" height="16" rx="4" />
-      <path d="M8 8l8 8M16 8l-8 8" stroke="#fff" strokeWidth="1.8" strokeLinecap="round"/>
-    </svg>
-  )
-}
-function IconGeneric() {
-  return (
-    <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden>
-      <circle cx="12" cy="12" r="10" />
-      <path d="M8 12h8M12 8v8" stroke="#fff" strokeWidth="1.6" strokeLinecap="round"/>
-    </svg>
-  )
-}
-
-/* ---------- Styles (kept from your original, with neutral fills so they match your theme) ---------- */
-function Style() {
-  return (
-    <style>{`
-      .cw-wrap { max-width: 920px; margin: 0 auto; padding: 14px; }
-
-      .cw-top { display:flex; align-items:center; justify-content:space-between; margin-bottom: 10px; }
-      .cw-back {
-        width:36px; height:36px; border-radius:10px; border:1px solid rgba(255,255,255,0.16);
-        background:linear-gradient(135deg, rgba(255,255,255,0.10), rgba(255,255,255,0.05)); color:#fff;
-      }
-      .cw-title { margin: 0; }
-
-      .cw-card {
-        border:1px solid rgba(255,255,255,0.16);
-        background:linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.04));
-        border-radius:16px; padding:16px; backdrop-filter: blur(8px);
-      }
-      .cw-hero { margin: 6px 0 12px; text-align: center; }
-      .cw-hero h1 { margin:0 0 6px; font-size: clamp(22px, 4.8vw, 38px); }
-      .cw-hero p { margin:0 0 10px; color: rgba(255,255,255,0.85); }
-      .cw-bullets { display:grid; gap:6px; color: rgba(255,255,255,0.9); justify-content:center; }
-
-      .cw-connected {
-        display:flex; align-items:center; justify-content:center; gap:10px; margin-top:10px; flex-wrap:wrap;
-      }
-      .addr-tag {
-        padding: 8px 10px; border-radius: 999px; background: #0b1220;
-        border: 1px solid rgba(255,255,255,0.06); font-family: monospace;
-      }
-      .connected-actions button { margin-left: 6px; }
-
-      .cw-note { margin: 8px 0 12px; text-align: center; }
-
-      .cw-grid { display:grid; gap:10px; margin: 10px 0 12px; }
-      .cw-wallet {
-        display:flex; align-items:center; gap:12px; width:100%;
-        padding:12px; border-radius:14px; position:relative; overflow:hidden;
-        border:1px solid rgba(255,255,255,0.16);
-        background: linear-gradient(135deg, rgba(255,255,255,0.10), rgba(255,255,255,0.05));
-        transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
-        text-align:left; color:#fff;
-      }
-      .cw-wallet.is-live:hover {
-        transform: translateY(-1px);
-        border-color: rgba(255,255,255,0.28);
-        box-shadow: 0 14px 30px rgba(99,102,241,0.30), inset 0 0 60px rgba(255,255,255,0.06);
-      }
-      .cw-wallet.is-ghost { opacity: .9; }
-      .cw-wallet.is-ghost .cw-sub { opacity: .85; }
-      .cw-wallet.is-loading { opacity: .6; pointer-events:none; }
-
-      .cw-icon { width:34px; height:34px; display:grid; place-items:center; border-radius:10px;
-        background: radial-gradient(circle at 30% 30%, rgba(99,102,241,0.35), rgba(236,72,153,0.35));
-      }
-      .cw-meta { display:flex; flex-direction:column; gap:2px; }
-      .cw-name { font-weight:900; letter-spacing:.2px; }
-      .cw-sub { font-size:12px; opacity:.9; }
-      .cw-chevron { margin-left:auto; font-weight:900; opacity:.8; }
-
-      .cw-error {
-        color: #ffb4b4;
-        background: rgba(255, 0, 0, 0.12);
-        border: 1px solid rgba(255, 0, 0, 0.22);
-        border-radius: 12px;
-        padding: 10px 12px;
-        margin: 8px 0 12px;
-        text-align:center;
-      }
-
-      .cw-secure { text-align:center; opacity:.85; }
-    `}</style>
-  )
-}
+const pageWrap: React.CSSProperties = {
+  minHeight: "100dvh", display: "grid", placeItems: "center", padding: 16,
+  background: "radial-gradient(1200px 700px at 10% -10%, #20104b 0%, #0b0b13 60%)",
+};
+const card: React.CSSProperties = {
+  width: "100%", maxWidth: 520, background: "rgba(255,255,255,0.04)",
+  border: "1px solid rgba(255,255,255,0.12)", borderRadius: 16, padding: 24,
+  boxShadow: "0 20px 60px rgba(0,0,0,.35)", color: "#e7e9ee",
+};
+const title: React.CSSProperties = { margin: 0, fontSize: 24, fontWeight: 700 };
+const subtitle: React.CSSProperties = { margin: "6px 0 18px", opacity: 0.85 };
+const btnPrimary: React.CSSProperties = {
+  padding: "12px 16px", borderRadius: 10, border: "1px solid #6b46c1",
+  background: "linear-gradient(180deg,#7c3aed,#5b21b6)", color: "#fff",
+  cursor: "pointer", fontWeight: 600, boxShadow: "0 10px 30px rgba(124,58,237,.35)",
+};
+const btnMuted: React.CSSProperties = {
+  padding: "12px 16px", borderRadius: 10, border: "1px solid rgba(255,255,255,.25)",
+  background: "transparent", color: "#e7e9ee", cursor: "pointer",
+};
+const pill: React.CSSProperties = { margin: "10px 0 14px", padding: "10px 12px", borderRadius: 12, border: "1px dashed rgba(255,255,255,.25)" };
+const mono: React.CSSProperties = { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" };
+const errBox: React.CSSProperties = { background: "rgba(255,0,0,0.08)", border: "1px solid rgba(255,0,0,0.3)", color: "#ffd5d5", padding: 10, borderRadius: 10 };
+const okBox: React.CSSProperties = { background: "rgba(0,180,0,0.08)", border: "1px solid rgba(0,180,0,0.35)", color: "#9effc6", padding: 10, borderRadius: 10 };
+const note: React.CSSProperties = { marginTop: 10, fontSize: 12, opacity: 0.8 };
+const devBox: React.CSSProperties = { marginTop: 14, padding: "8px 10px", borderRadius: 10, border: "1px dashed rgba(255,255,255,.2)", opacity: 0.85 };

@@ -7,7 +7,7 @@ import { createRoot } from 'react-dom/client'
 import { AppProvider, useApp, type ContestRealm } from './state'
 
 import Landing from './pages_Landing'
-// import ConnectWallet from './pages_ConnectWallet' // removed to avoid double popups
+// import ConnectWallet from './pages_ConnectWallet' // keep disabled to avoid double popups
 import HomeHub from './pages_HomeHub'
 import ContestTypes from './pages_ContestTypes'
 import TeamSelection from './pages_TeamSelection'
@@ -25,9 +25,10 @@ import ContactUs from './pages_ContactUs'
 import AdminPage from './pages_Admin'
 import SignInWithWallet from './components/SignInWithWallet'
 import HistoryPage from './pages_History'
-import Transfers from './pages_Transfers'      // ✅ NEW
-import Profile from './pages_Profile'          // ✅ NEW
+import Transfers from './pages_Transfers'
+import Profile from './pages_Profile'
 import './styles/menu-drawer.css'
+import './polyfills';
 
 import { ConnectionProvider, WalletProvider, useWallet } from '@solana/wallet-adapter-react'
 import { PhantomWalletAdapter } from '@solana/wallet-adapter-wallets'
@@ -38,13 +39,46 @@ type Route =
   | 'landing' | 'connect' | 'home' | 'contestTypes' | 'teamSelect' | 'joinContest'
   | 'create' | 'leaderboard' | 'rewards' | 'viewteam' | 'top10' | 'fixtures'
   | 'stats' | 'howToPlay' | 'about' | 'contact' | 'admin'
-  | 'history' | 'transfers' | 'profile'          // ✅ NEW
+  | 'history' | 'transfers' | 'profile'
 
-const API_BASE = (import.meta as any).env?.VITE_API_BASE || 'http://localhost:4000'
+const API_BASE = (import.meta as any).env?.VITE_API_BASE || ''
 const SOLANA_RPC = (import.meta as any).env?.VITE_SOLANA_RPC || 'https://api.devnet.solana.com'
 
-// unified token helpers
-const getToken = () => { try { return localStorage.getItem('auth_token') || '' } catch { return '' } }
+/** ---- token helpers (reads both keys) ---- */
+const getToken = () => {
+  try {
+    return localStorage.getItem('auth_token') || localStorage.getItem('authToken') || ''
+  } catch { return '' }
+}
+const setToken = (t: string) => {
+  try {
+    localStorage.setItem('auth_token', t)
+    localStorage.setItem('authToken', t)
+  } catch {}
+}
+const clearToken = () => {
+  try {
+    localStorage.removeItem('auth_token')
+    localStorage.removeItem('authToken')
+  } catch {}
+}
+
+/** Try multiple /me endpoints (different backends) */
+async function fetchMe(token: string) {
+  if (!API_BASE) return null
+  const headers = { Authorization: `Bearer ${token}` }
+  const opts: RequestInit = { headers, credentials: 'include' }
+
+  // try in order: /user/me → /auth/me → /me
+  const paths = ['/user/me', '/auth/me', '/me']
+  for (const p of paths) {
+    try {
+      const r = await fetch(`${API_BASE}${p}`, opts)
+      if (r.ok) return await r.json().catch(() => null)
+    } catch {}
+  }
+  return null
+}
 
 function AppInner() {
   const [route, setRoute] = useState<Route>('landing')
@@ -57,6 +91,7 @@ function AppInner() {
   const getTG = () => (window as any)?.Telegram?.WebApp
   const supports = (min: string) => { try { return getTG()?.isVersionAtLeast?.(min) === true } catch { return false } }
 
+  // Telegram init
   useEffect(() => {
     const tg = getTG()
     try {
@@ -65,12 +100,14 @@ function AppInner() {
     } catch {}
   }, [])
 
+  // Back button visibility
   useEffect(() => {
     const tg = getTG()
     const showBack = !['landing','home'].includes(route)
     if (supports('6.1')) { try { showBack ? tg?.BackButton?.show?.() : tg?.BackButton?.hide?.() } catch {} }
   }, [route])
 
+  // Back button handler
   useEffect(() => {
     const tg = getTG()
     if (!supports('6.1')) return
@@ -86,35 +123,27 @@ function AppInner() {
 
   const go = (next: Route) => { const stack = stackRef.current; stack.push(next); setRoute(next) }
   const back = () => { const stack = stackRef.current; if (stack.length > 1) { stack.pop(); setRoute(stack[stack.length - 1]) } }
+  const replaceRoute = (next: Route) => { stackRef.current = [next]; setRoute(next) }
 
   const handleConnected = (addr: string) => {
     try { localStorage.setItem('sol_wallet', addr) } catch {}
-    setWalletAddress(addr); setRealm('free'); go('home')
+    setWalletAddress(addr)
+    setRealm('free')
+    replaceRoute('home')
   }
 
-  // When wallet connection changes or a token is present, try to establish app auth.
-  useEffect(() => {
-    (async () => {
-      setAuthed(false); setIsAdmin(false)
-      const addr = wallet?.publicKey?.toBase58() || ''
-      const token = getToken()
-      if (!token) return
-
-      // Resolve /me with Authorization header (required)
-      try {
-        const me = await fetch(`${API_BASE}/me`, {
-          headers: { Authorization: `Bearer ${token}` },
-          credentials: 'include',
-        })
-        if (me.ok) {
-          const j = await me.json().catch(() => null)
-          const effectiveAddr = j?.user?.id || addr || ''
-          if (effectiveAddr) handleConnected(effectiveAddr)
-          setAuthed(true)
-        }
-      } catch {}
-
-      // Determine admin from token (role in payload)
+  /** Establish app auth when wallet or token is present */
+  const tryAuthFromToken = async () => {
+    const token = getToken()
+    if (!token) return false
+    // Fetch profile
+    const me = await fetchMe(token)
+    if (me) {
+      // pick an id/wallet-like field
+      const addr = me?.user?.id || me?.wallet || me?.id || wallet?.publicKey?.toBase58() || ''
+      if (addr) handleConnected(addr)
+      setAuthed(true)
+      // check admin claim if available
       try {
         const r = await fetch(`${API_BASE}/auth/introspect`, {
           method: 'POST',
@@ -123,42 +152,57 @@ function AppInner() {
           credentials: 'include',
         })
         if (r.ok) {
-          const j = await r.json()
+          const j = await r.json().catch(() => null)
           setIsAdmin(String(j?.payload?.role || '').toUpperCase() === 'ADMIN')
         } else {
           setIsAdmin(false)
         }
       } catch { setIsAdmin(false) }
+      return true
+    }
+    return false
+  }
+
+  // On wallet connect or change → attempt auth with any existing token
+  useEffect(() => {
+    (async () => {
+      setAuthed(false); setIsAdmin(false)
+      await tryAuthFromToken()
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wallet.connected, wallet.publicKey?.toBase58()])
 
-  // Also react if a token appears later (e.g., SignInWithWallet saved it)
+  // React if the token appears later (SignInWithWallet sets localStorage)
   useEffect(() => {
-    const i = setInterval(() => {
-      if (!authed && getToken()) {
-        // token just landed; re-run the effect by poking state
-        setAuthed(true)
-        // best-effort: fetch /me once to get address if we don't have it yet
-        ;(async () => {
-          try {
-            const token = getToken()
-            const me = await fetch(`${API_BASE}/me`, {
-              headers: { Authorization: `Bearer ${token}` },
-              credentials: 'include',
-            })
-            if (me.ok) {
-              const j = await me.json().catch(() => null)
-              const addr = j?.user?.id
-              if (addr) handleConnected(addr)
-            }
-          } catch {}
-        })()
+    // 1) storage event (cross-tab / same-tab in some browsers on setItem)
+    const onStorage = async (e: StorageEvent) => {
+      if (!e.key) return
+      if (e.key === 'auth_token' || e.key === 'authToken') {
+        if (e.newValue) {
+          await tryAuthFromToken()
+        } else {
+          clearToken()
+          setAuthed(false)
+        }
       }
-    }, 800)
-    return () => clearInterval(i)
-  }, [authed])
+    }
+    window.addEventListener('storage', onStorage)
 
+    // 2) lightweight poll as a fallback (same-tab setItem may not emit 'storage' in all browsers)
+    let last = getToken()
+    const id = window.setInterval(async () => {
+      const cur = getToken()
+      if (cur && cur !== last) {
+        last = cur
+        await tryAuthFromToken()
+      }
+    }, 700)
+
+    return () => { window.removeEventListener('storage', onStorage); clearInterval(id) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Landing CTA
   const onLaunch = () => {
     const token = getToken()
     if (token) { setRealm('free'); go('home'); return }
@@ -176,7 +220,7 @@ function AppInner() {
 
       {route === 'connect' && (
         <div style={{ display: 'grid', gap: 12, padding: 16 }}>
-          {/* We ONLY show one sign-in path to avoid double popups */}
+          {/* Single sign-in surface to avoid multiple Phantom popups */}
           <SignInWithWallet />
           <small>Tip: If you don’t see the wallet popup, click the Phantom icon in your browser toolbar.</small>
         </div>
@@ -189,7 +233,7 @@ function AppInner() {
           onJoinContest={() => go('contestTypes')}
           onLeaderboard={() => go('leaderboard')}
           onTop10={() => go('top10')}
-          onTransfers={() => go('transfers')}     // ✅ now routes to Transfers page
+          onTransfers={() => go('transfers')}
           onFixtures={() => go('fixtures')}
           onStats={() => go('stats')}
           onBack={back}
@@ -198,8 +242,8 @@ function AppInner() {
           onContactUs={() => go('contact')}
           isAdmin={isAdmin}
           onAdmin={handleAdminNav}
-          onHistory={() => go('history')}         // ✅ History route
-          onProfile={() => go('profile')}         // ✅ Profile tab -> Profile page
+          onHistory={() => go('history')}
+          onProfile={() => go('profile')}
         />
       )}
 
@@ -218,8 +262,8 @@ function AppInner() {
       {route === 'contact' && <ContactUs onBack={back} />}
       {route === 'admin' && <AdminPage onBack={back} />}
       {route === 'history' && <HistoryPage onBack={back} />}
-      {route === 'transfers' && <Transfers onBack={back} />}    {/* ✅ NEW */}
-      {route === 'profile' && <Profile onBack={back} />}        {/* ✅ NEW */}
+      {route === 'transfers' && <Transfers onBack={back} />}
+      {route === 'profile' && <Profile onBack={back} />}
     </>
   )
 }
@@ -231,7 +275,7 @@ const root = createRoot(document.getElementById('root')!)
 root.render(
   // Keep StrictMode off to avoid double effects/calls in dev
   <ConnectionProvider endpoint={endpoint}>
-    <WalletProvider wallets={wallets} /* autoConnect={false} by default */>
+    <WalletProvider wallets={wallets}>
       <WalletModalProvider>
         <AppProvider>
           <AppInner />
