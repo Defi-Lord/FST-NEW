@@ -62,7 +62,7 @@ export async function safeJson(r: Response) {
   }
 }
 
-// Generic GET with credentials (for cookie-based flows)
+// ---------- Generic fetchers ----------
 async function apiGet<T>(path: string): Promise<T> {
   if (!API_BASE) throw new Error("VITE_API_BASE is missing in production.");
   const res = await fetch(`${API_BASE}${path}`, { credentials: "include" });
@@ -73,7 +73,6 @@ async function apiGet<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-// Generic POST with credentials
 async function apiPost<T>(path: string, body: unknown): Promise<T> {
   if (!API_BASE) throw new Error("VITE_API_BASE is missing in production.");
   const res = await fetch(`${API_BASE}${path}`, {
@@ -87,6 +86,47 @@ async function apiPost<T>(path: string, body: unknown): Promise<T> {
     throw new Error(err?.error || `POST ${path} failed (${res.status})`);
   }
   return res.json() as Promise<T>;
+}
+
+// ---- Authenticated (JWT) helpers ----
+function getAuthToken(): string | null {
+  try {
+    return typeof window !== "undefined" ? window.localStorage.getItem("authToken") : null;
+  } catch {
+    return null;
+  }
+}
+
+async function authFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  if (!API_BASE) throw new Error("VITE_API_BASE is missing in production.");
+  const token = getAuthToken();
+  const res = await fetch(`${API_BASE}${path}`, {
+    credentials: "include",
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers || {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+  if (!res.ok) {
+    const err = await safeJson(res);
+    throw new Error(err?.error || `${init?.method || "GET"} ${path} failed (${res.status})`);
+  }
+  return res.json() as Promise<T>;
+}
+
+async function authGet<T>(path: string): Promise<T> {
+  return authFetch<T>(path, { method: "GET" });
+}
+async function authPost<T>(path: string, body?: unknown): Promise<T> {
+  return authFetch<T>(path, { method: "POST", body: JSON.stringify(body ?? {}) });
+}
+async function authPut<T>(path: string, body?: unknown): Promise<T> {
+  return authFetch<T>(path, { method: "PUT", body: JSON.stringify(body ?? {}) });
+}
+async function authDelete<T>(path: string): Promise<T> {
+  return authFetch<T>(path, { method: "DELETE" });
 }
 
 // ---------- Auth endpoints ----------
@@ -106,12 +146,12 @@ export async function verifySignature(payload: { walletAddress: string; signatur
   }>(`/auth/verify`, payload);
 }
 
-// ---------- FPL-style data helpers used by pages_HomeHub.tsx ----------
+// ---------- Public (FPL-style) data ----------
 export async function fetchFixtures(): Promise<any> {
   try {
     return await apiGet<any>("/public/fixtures");
   } catch {
-    // fallback to local mock (served from /public)
+    // Fallback to local mock under /public/mock
     const r = await fetch("/mock/fixtures.json");
     if (!r.ok) throw new Error(`fixtures mock not found (${r.status})`);
     return r.json();
@@ -141,34 +181,62 @@ export type Contest = {
   currency?: string;
   startsAt?: string; // ISO
   endsAt?: string;   // ISO
-  [k: string]: any;  // allow extra fields from your API
+  [k: string]: any;
 };
 
-/** GET list of contests */
 export async function listContests(): Promise<Contest[]> {
-  // Adjust endpoint to your server route; from your repo it likely lives under /public/contests
   return apiGet<Contest[]>("/public/contests");
 }
 
-/** POST free join (or zero-fee) */
 export async function joinContest(contestId: string, payload?: Record<string, any>) {
-  // Common pattern: /public/contests/:id/join
-  return apiPost<{ ok: true; entryId: string }>(`/public/contests/${encodeURIComponent(contestId)}/join`, payload ?? {});
+  return apiPost<{ ok: true; entryId: string }>(
+    `/public/contests/${encodeURIComponent(contestId)}/join`,
+    payload ?? {}
+  );
 }
 
-/** POST start a paid join (creates a payment intent / reference) */
 export async function startPaidJoin(contestId: string, payload?: Record<string, any>) {
-  // Common pattern: /public/contests/:id/join/start
   return apiPost<{ ok: true; reference?: string; paymentUrl?: string }>(
     `/public/contests/${encodeURIComponent(contestId)}/join/start`,
     payload ?? {}
   );
 }
 
-/** GET/POST verify a paid join after payment completes */
 export async function verifyPaidJoin(contestId: string, reference: string) {
-  // Common pattern: /public/contests/:id/join/verify?reference=...
   return apiGet<{ ok: true; entryId: string }>(
     `/public/contests/${encodeURIComponent(contestId)}/join/verify?reference=${encodeURIComponent(reference)}`
   );
+}
+
+// ---------- Admin endpoints (JWT required) ----------
+export type NewContestInput = {
+  name: string;
+  entryFee?: number;
+  currency?: string;
+  startsAt?: string; // ISO
+  endsAt?: string;   // ISO
+  [k: string]: any;
+};
+
+export type UpdateContestInput = Partial<NewContestInput> & { status?: Contest["status"] };
+
+export async function adminHealth(): Promise<{ ok: boolean; [k: string]: any }> {
+  // Prefer admin health; if not present on server, fallback to public health
+  try {
+    return await authGet<{ ok: boolean }>("/admin/healthz");
+  } catch {
+    return apiGet<{ ok: boolean }>("/public/healthz");
+  }
+}
+
+export async function createContest(input: NewContestInput) {
+  return authPost<Contest>("/admin/contests", input);
+}
+
+export async function updateContest(id: string, patch: UpdateContestInput) {
+  return authPut<Contest>(`/admin/contests/${encodeURIComponent(id)}`, patch);
+}
+
+export async function deleteContest(id: string) {
+  return authDelete<{ ok: true }>(`/admin/contests/${encodeURIComponent(id)}`);
 }
