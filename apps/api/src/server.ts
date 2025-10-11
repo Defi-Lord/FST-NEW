@@ -1,275 +1,198 @@
-import express, { Request, Response } from "express";
-import helmet from "helmet";
-import cors, { CorsOptions } from "cors";
-import cookieParser from "cookie-parser";
-import jwt from "jsonwebtoken";
-import bs58 from "bs58";
-import nacl from "tweetnacl";
-import { PrismaClient } from "@prisma/client";
-import { randomUUID } from "node:crypto";
+// src/server.ts
+import express from 'express';
+import cookieParser from 'cookie-parser';
+import crypto from 'crypto';
+import jwt from 'jsonwebtoken';
+import nacl from 'tweetnacl';
+import bs58 from 'bs58';
 
-// ---------- Config ----------
-const prisma: any = new PrismaClient(); // keep 'any' to avoid compile issues if prisma types aren't generated yet
+/* ---------------- ENV ---------------- */
+const PORT = Number(process.env.PORT || 4000);
 
-const APP_NAME = process.env.APP_NAME ?? "FST";
-const JWT_SECRET = process.env.JWT_SECRET || "";
-if (!JWT_SECRET) {
-  console.error("Missing JWT_SECRET environment variable.");
-  process.exit(1);
-}
+// Comma-separated list. Examples:
+//   CORS_ORIGIN = https://fst-mini-app.vercel.app,https://*.vercel.app
+const RAW_ORIGINS = (process.env.CORS_ORIGIN || '').trim();
 
-const NODE_ENV = process.env.NODE_ENV || "development";
-const IS_PROD = NODE_ENV === "production";
+// Use a LONG random string (≥64 chars) in production!
+const JWT_SECRET = process.env.JWT_SECRET || 'PLEASE_SET_A_LONG_RANDOM_SECRET';
 
-const allowed = (process.env.CORS_ORIGIN ?? "")
-  .split(",")
-  .map((s) => s.trim())
+/* ------------- ORIGIN MATCH ------------- */
+const ALLOWED = RAW_ORIGINS
+  .split(',')
+  .map(s => s.trim().replace(/\/+$/, ''))
   .filter(Boolean);
 
-const PORT = Number(process.env.PORT) || 4000;
+function originAllowed(origin?: string) {
+  if (!origin) return false;
+  for (const pat of ALLOWED) {
+    if (pat.includes('*')) {
+      const re = new RegExp('^' + pat.replace(/\./g, '\\.').replace(/\*/g, '.*') + '$');
+      if (re.test(origin)) return true;
+    } else if (origin === pat) {
+      return true;
+    }
+  }
+  return false;
+}
 
-// ---------- App ----------
+/* ---------------- APP ---------------- */
 const app = express();
 
-// cast to any to bypass Express' overloaded .use() typing differences
-app.use(helmet() as any);
-app.use(express.json() as any);
-app.use(cookieParser() as any);
+// Required so Secure cookies work behind Render/proxies
+app.set('trust proxy', 1);
 
-// CORS (lock down in prod via CORS_ORIGIN)
-const corsOptions: CorsOptions = {
-  origin: (origin, callback) => {
-    if (!origin) return callback(null, true);              // allow curl/postman
-    if (allowed.length === 0) return callback(null, true); // allow all if not set
-    if (allowed.includes(origin)) return callback(null, true);
-    return callback(new Error("Not allowed by CORS"));
-  },
-  credentials: true
-};
-app.use(cors(corsOptions) as any);
+app.use(express.json());
+app.use(cookieParser());
 
-// ---------- Helpers ----------
-type NonceCookiePayload = {
-  t: "nonce";
-  wallet: string;
-  nonce: string;
-  msg: string;
-  iat: number;
-  exp: number;
-  jti: string;
-};
+// Dynamic CORS that reflects only allowed origins
+app.use((req, res, next) => {
+  const origin = req.headers.origin as string | undefined;
+  if (origin && originAllowed(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Vary', 'Origin');
+  }
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
 
-function signNonceCookie(payload: { wallet: string; nonce: string; msg: string }) {
-  const jti = randomUUID();
-  // 5 minutes
-  const token = jwt.sign({ t: "nonce", ...payload }, JWT_SECRET, {
-    expiresIn: "5m",
-    jwtid: jti
-  });
-  return { token, jti };
+/* -------------- HELPERS -------------- */
+const te = new TextEncoder();
+const utf8 = (s: string) => te.encode(s);
+
+function signJwt(sub: string) {
+  return jwt.sign({ sub, app: 'FST' }, JWT_SECRET, { expiresIn: '7d' });
 }
 
-function setCookie(res: Response, name: string, value: string, maxAgeMs: number, options?: any) {
-  res.cookie(name, value, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: IS_PROD, // true in production (HTTPS)
-    maxAge: maxAgeMs,
-    path: "/",
-    ...(options || {})
-  });
+function tokenFromAuth(req: express.Request) {
+  const h = req.headers.authorization || '';
+  const m = /^Bearer\s+(.+)$/.exec(h);
+  return m ? m[1] : null;
 }
 
-function clearCookie(res: Response, name: string) {
-  res.clearCookie(name, { httpOnly: true, sameSite: "lax", secure: IS_PROD, path: "/" });
-}
+/* -------------- ROUTES -------------- */
 
-function toBytes(str: string): Uint8Array {
-  return new TextEncoder().encode(str);
-}
-
-// ---------- Routes ----------
-
-// simple root so "/" doesn't 404
-app.get("/", (_req: Request, res: Response) => {
+// Health
+app.get('/public/healthz', (_req, res) => {
   res.json({
     ok: true,
-    name: APP_NAME,
-    message: "API is running",
+    name: 'FST',
+    message: 'API is running',
     docs: {
-      health: "/public/healthz",
-      nonce: "/auth/nonce?wallet=<BASE58_WALLET>",
-      verify: "POST /auth/verify { walletAddress, signatureBase58 }",
-      me: "GET /me (Authorization: Bearer <token>)"
-    }
+      health: '/public/healthz',
+      nonce: '/auth/nonce?wallet=<BASE58_WALLET>',
+      verify: 'POST /auth/verify { walletAddress, signatureBase58, nonce? }',
+      me: 'GET /me (Authorization: Bearer <token>)'
+    },
+    allowedOrigins: ALLOWED
   });
 });
 
-app.get("/public/healthz", (_req: Request, res: Response) => res.json({ ok: true }));
-
 /**
  * GET /auth/nonce?wallet=<base58>
- * Returns the exact message to sign + sets an HttpOnly "nonce" cookie (JWT, 5m)
+ * Sets a cross-site HttpOnly cookie 'nonce' AND returns { nonce, message } in JSON.
  */
-app.get("/auth/nonce", async (req: Request, res: Response) => {
-  try {
-    const wallet = String(req.query.wallet || "").trim();
-    if (!wallet) return res.status(400).json({ error: "Missing wallet param" });
+app.get('/auth/nonce', (req, res) => {
+  const wallet = String(req.query.wallet || '').trim();
+  if (!wallet) return res.status(400).json({ error: 'Missing wallet' });
 
-    const nonce = randomUUID();
-    const issuedAt = new Date().toISOString();
-    const message =
-      `${APP_NAME} login\n\n` +
-      `Wallet: ${wallet}\n` +
-      `Nonce: ${nonce}\n` +
-      `Issued At: ${issuedAt}\n` +
-      `\nBy signing, you prove ownership of this wallet.`;
+  const nonce = crypto.randomUUID();
 
-    const { token } = signNonceCookie({ wallet, nonce, msg: message });
-    setCookie(res, "nonce", token, 5 * 60 * 1000); // 5 minutes
+  // Cross-site cookie (best practice). Some browsers may block — the JSON fallback handles it.
+  res.cookie('nonce', nonce, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'none',
+    path: '/',
+    maxAge: 5 * 60 * 1000, // 5 minutes
+  });
 
-    return res.json({
-      wallet,
-      nonce,
-      message,
-      expiresInSec: 300
-    });
-  } catch (err) {
-    console.error("nonce error", err);
-    return res.status(500).json({ error: "Internal error" });
-  }
+  // Deterministic message; must match verification message exactly
+  const message = `Sign in to FST as ${wallet}\nNonce: ${nonce}`;
+
+  res.json({ wallet, nonce, message, expiresInSec: 300 });
 });
 
 /**
  * POST /auth/verify
- * Body: { walletAddress: string, signatureBase58: string }
- * Verifies signature over the EXACT message from /auth/nonce.
- * Upserts User + Wallet, creates a Session, and returns a 30-day JWT.
+ * Body: { walletAddress, signatureBase58, nonce? }
+ * Validates signature for the exact message. Accepts nonce from cookie OR body.
  */
-app.post("/auth/verify", async (req: Request, res: Response) => {
+app.post('/auth/verify', (req, res) => {
+  const { walletAddress, signatureBase58, nonce: nonceFromBody } = req.body || {};
+
+  if (!walletAddress || !signatureBase58) {
+    return res.status(400).json({ error: 'Missing walletAddress or signatureBase58' });
+  }
+
+  // Accept nonce via cookie OR body (fallback for blocked third-party cookies)
+  const nonceCookie = req.cookies?.nonce;
+  const nonce =
+    nonceCookie || (typeof nonceFromBody === 'string' ? nonceFromBody : '');
+
+  if (!nonce) {
+    return res.status(400).json({ error: 'Missing nonce (cookie or body)' });
+  }
+
+  // Recreate the EXACT message the user signed
+  const message = `Sign in to FST as ${walletAddress}\nNonce: ${nonce}`;
+
+  // Decode pubkey + signature (base58)
+  let pubkey: Uint8Array, sig: Uint8Array;
   try {
-    const { walletAddress, signatureBase58 } = (req.body ?? {}) as {
-      walletAddress?: string;
-      signatureBase58?: string;
-    };
-    if (!walletAddress || !signatureBase58) {
-      return res.status(400).json({ error: "walletAddress and signatureBase58 are required" });
-    }
+    pubkey = bs58.decode(walletAddress);
+    sig = bs58.decode(signatureBase58);
+  } catch {
+    return res.status(400).json({ error: 'Invalid base58 in walletAddress or signatureBase58' });
+  }
 
-    const nonceCookie = (req.cookies as any)?.nonce as string | undefined;
-    if (!nonceCookie) return res.status(400).json({ error: "Missing nonce cookie" });
+  // Verify ed25519
+  const ok = nacl.sign.detached.verify(utf8(message), sig, pubkey);
+  if (!ok) return res.status(401).json({ error: 'Invalid signature' });
 
-    let nonceData: any;
-    try {
-      nonceData = jwt.verify(nonceCookie, JWT_SECRET);
-    } catch {
-      return res.status(400).json({ error: "Invalid or expired nonce" });
-    }
-    if (nonceData.t !== "nonce") return res.status(400).json({ error: "Bad nonce payload" });
-    if (nonceData.wallet !== walletAddress) {
-      return res.status(400).json({ error: "Wallet mismatch with nonce" });
-    }
+  // Clear one-time nonce if it existed as a cookie
+  if (nonceCookie) {
+    res.clearCookie('nonce', { path: '/', sameSite: 'none', secure: true });
+  }
 
-    const message: string = nonceData.msg;
-    const sig = bs58.decode(signatureBase58);
-    const pubkey = bs58.decode(walletAddress);
-    const ok = nacl.sign.detached.verify(toBytes(message), sig, pubkey);
-    if (!ok) return res.status(401).json({ error: "Invalid signature" });
+  // Issue JWT
+  const token = signJwt(walletAddress);
 
-    // Upsert user + wallet
-    let existingWallet = await prisma.wallet?.findFirst?.({
-      where: { address: walletAddress },
-      select: { id: true, userId: true }
-    });
+  // (Optional) Also set an auth cookie for same-site API usage (your SPA uses localStorage too)
+  res.cookie('auth', token, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'none',
+    path: '/',
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  });
 
-    let userId: string;
-    let walletId: string;
+  res.json({ ok: true, userId: walletAddress, token });
+});
 
-    if (existingWallet) {
-      userId = existingWallet.userId;
-      walletId = existingWallet.id;
-    } else {
-      userId = randomUUID();
-      walletId = randomUUID();
-      await prisma.user.create({
-        data: {
-          id: userId,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-          displayName: null
-        }
-      });
-      await prisma.wallet.create({
-        data: {
-          id: walletId,
-          address: walletAddress,
-          chain: "solana",
-          userId
-        }
-      });
-    }
+/**
+ * GET /me  (Authorization: Bearer <token>)
+ * Returns the user subject from JWT.
+ */
+app.get('/me', (req, res) => {
+  const token = tokenFromAuth(req);
+  if (!token) return res.status(401).json({ error: 'Missing Authorization: Bearer <token>' });
 
-    // Create a 30-day auth JWT + Session row
-    const jti = randomUUID();
-    const authToken = jwt.sign({ sub: userId, wid: walletId, t: "auth" }, JWT_SECRET, {
-      expiresIn: "30d",
-      jwtid: jti
-    });
+  try {
+    const payload: any = jwt.verify(token, JWT_SECRET);
+    const id = String(payload?.sub || '');
+    if (!id) return res.status(401).json({ error: 'Invalid token' });
 
-    const sessionId = randomUUID();
-    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-    await prisma.session?.create?.({
-      data: { id: sessionId, userId, jwtId: jti, expiresAt }
-    });
-
-    clearCookie(res, "nonce");
-    setCookie(res, "auth", authToken, 30 * 24 * 60 * 60 * 1000);
-
-    return res.json({
-      ok: true,
-      token: authToken,
-      userId,
-      walletId,
-      expiresAt: expiresAt.toISOString()
-    });
-  } catch (err) {
-    console.error("verify error", err);
-    return res.status(500).json({ error: "Internal error" });
+    res.json({ ok: true, user: { id, wallet: id } });
+  } catch {
+    res.status(401).json({ error: 'Invalid token' });
   }
 });
 
-// Example protected route (Authorization: Bearer <token>)
-app.get("/me", async (req: Request, res: Response) => {
-  try {
-    const auth = req.headers.authorization || "";
-    const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
-    if (!token) return res.status(401).json({ error: "Missing token" });
-
-    let payload: any;
-    try {
-      payload = jwt.verify(token, JWT_SECRET);
-    } catch {
-      return res.status(401).json({ error: "Invalid token" });
-    }
-    if (payload.t !== "auth") return res.status(401).json({ error: "Bad token type" });
-
-    const user = await prisma.user.findUnique({
-      where: { id: payload.sub },
-      select: { id: true, displayName: true, createdAt: true, updatedAt: true }
-    });
-    return res.json({ user });
-  } catch (err) {
-    console.error("me error", err);
-    return res.status(500).json({ error: "Internal error" });
-  }
-});
-
-// Catch-all 404 (JSON)
-app.use((_req: Request, res: Response) => {
-  res.status(404).json({ ok: false, error: "Not Found" });
-});
-
-// ---------- Start ----------
+/* -------------- START -------------- */
 app.listen(PORT, () => {
-  console.log(`API running on :${PORT}`);
+  console.log(`FST API listening on :${PORT}`);
+  console.log(`Allowed origins: ${ALLOWED.length ? ALLOWED.join(', ') : '(none set)'}`);
 });
