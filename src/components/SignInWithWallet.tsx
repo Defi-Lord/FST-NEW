@@ -1,6 +1,7 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { API_BASE, getNonce, verifySignature, toBytes, base58Encode, isProd } from "../api";
 
+/* ---------------------------------- types --------------------------------- */
 type Status =
   | { kind: "idle" }
   | { kind: "connecting" }
@@ -21,15 +22,13 @@ type PhantomLike = {
   off?: (ev: string, cb: (...args: any[]) => void) => void;
 };
 
-// ------- helpers -------
+/* ------------------------------- small utils ------------------------------ */
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-    p.then((v) => { clearTimeout(t); resolve(v); })
-     .catch((e) => { clearTimeout(t); reject(e); });
+    p.then((v) => { clearTimeout(t); resolve(v); }).catch((e) => { clearTimeout(t); reject(e); });
   });
 }
-
 function detectPhantom(): PhantomLike | undefined {
   const w = typeof window !== "undefined" ? (window as any) : undefined;
   if (!w) return undefined;
@@ -40,25 +39,41 @@ function detectPhantom(): PhantomLike | undefined {
   if (p1?.connect && (p1?.publicKey || p1?.isConnected)) return p1 as PhantomLike;
   return undefined;
 }
-
 function redirectAfterLogin() {
   const url = new URL(window.location.href);
   const next = url.searchParams.get("next") || "/homehub";
-  // change this to your actual path if different (e.g. "/")
   window.location.assign(next);
 }
 
+/* -------------------------------- component ------------------------------- */
 export default function SignInWithWallet() {
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [address, setAddress] = useState<string>("");
-
   const provider = useMemo(detectPhantom, []);
 
+  // auto-wire wallet events (if any)
+  useEffect(() => {
+    if (!provider?.on) return;
+    const onConnect = () => {
+      const pk: any = provider.publicKey;
+      const base58 =
+        (pk?.toBase58?.() as string | undefined) ??
+        (pk?.toString?.() as string | undefined) ??
+        "";
+      if (base58) setAddress(base58);
+      if (status.kind === "connecting") setStatus({ kind: "idle" }); // clear limbo if wallet connected separately
+    };
+    provider.on("connect", onConnect);
+    return () => { provider.off?.("connect", onConnect); };
+  }, [provider, status.kind]);
+
   const connectWallet = useCallback(async (): Promise<string> => {
+    // If already have address, do NOT reconnect (prevents stuck "connecting")
+    if (address) return address;
+
     if (!provider || !provider.connect) {
       throw Object.assign(new Error("Phantom wallet not detected."), {
-        hint:
-          "Install Phantom then reload. Desktop: https://phantom.app/ . On mobile, open this site inside Phantom’s in-app browser.",
+        hint: "Install Phantom (https://phantom.app/) and reload. On mobile, open this site inside Phantom’s in-app browser.",
       });
     }
     setStatus({ kind: "connecting" });
@@ -70,17 +85,22 @@ export default function SignInWithWallet() {
       "";
     if (!pub) throw new Error("Could not read wallet address from Phantom.");
     setAddress(pub);
+    setStatus({ kind: "idle" }); // reset visible step after successful connect
     return pub;
-  }, [provider]);
+  }, [provider, address]);
 
   const signIn = useCallback(async () => {
     try {
+      // always start with a clean state
+      setStatus({ kind: "idle" });
+
       if (!API_BASE) {
         throw Object.assign(new Error("Missing VITE_API_BASE in production."), {
-          hint: "In Vercel → Settings → Environment Variables, set VITE_API_BASE to your Render API URL and redeploy.",
+          hint: "Vercel → Settings → Environment Variables: set VITE_API_BASE to your Render API URL and redeploy.",
         });
       }
 
+      // connect only if NOT already connected
       const wallet = address || (await connectWallet());
 
       // 1) nonce
@@ -91,7 +111,7 @@ export default function SignInWithWallet() {
       // 2) sign
       if (!provider?.signMessage) {
         throw Object.assign(new Error("Phantom cannot sign messages."), {
-          hint: "Open Phantom → Settings → Developer → enable Message Signing.",
+          hint: "In Phantom → Settings → Developer, enable Message Signing.",
         });
       }
       setStatus({ kind: "signing" });
@@ -111,8 +131,6 @@ export default function SignInWithWallet() {
       );
 
       setStatus({ kind: "success", userId: verify.userId, token: verify.token });
-
-      // 4) redirect immediately after success
       redirectAfterLogin();
     } catch (e: any) {
       setStatus({
@@ -129,7 +147,7 @@ export default function SignInWithWallet() {
     setStatus({ kind: "idle" });
   }, [provider]);
 
-  const disabled =
+  const isBusy =
     status.kind === "connecting" ||
     status.kind === "gettingNonce" ||
     status.kind === "signing" ||
@@ -137,105 +155,149 @@ export default function SignInWithWallet() {
 
   const showInstall = !provider || (!provider.isPhantom && !provider.connect);
 
+  /* --------------------------------- UI ---------------------------------- */
   return (
-    <div style={card}>
-      <h2 style={{ marginTop: 0 }}>Sign in with Solana</h2>
+    <div style={pageWrap}>
+      <div style={card}>
+        {/* Branding */}
+        <div style={brandRow}>
+          <div style={logoCircle}>
+            {/* minimalist Solana-ish stripes */}
+            <div style={stripe} />
+            <div style={{ ...stripe, opacity: 0.85 }} />
+            <div style={{ ...stripe, opacity: 0.7 }} />
+          </div>
+          <div>
+            <h1 style={h1}>Sign in with Solana</h1>
+            <p style={subtle}>Secure sign in using your Phantom wallet.</p>
+          </div>
+        </div>
 
-      {address ? (
-        <p style={muted}>
-          Connected: <span style={mono}>{address}</span>
-        </p>
-      ) : (
-        <p style={muted}>No wallet connected.</p>
-      )}
-
-      <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-        {showInstall ? (
-          <>
-            <a href="https://phantom.app/" target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>
-              <button style={btnPrimary}>Install Phantom</button>
-            </a>
-            <button style={btnSecondary} onClick={() => window.location.reload()}>Reload</button>
-          </>
-        ) : !address ? (
-          <button onClick={connectWallet} disabled={disabled} style={btnPrimary}>
-            {status.kind === "connecting" ? "Connecting…" : "Connect Phantom"}
-          </button>
+        {/* Address */}
+        {address ? (
+          <div style={infoRow}>
+            <span style={label}>Wallet</span>
+            <span style={mono}>{address}</span>
+          </div>
         ) : (
-          <>
-            <button onClick={disconnect} disabled={disabled} style={btnSecondary}>
-              Disconnect
-            </button>
-            <button onClick={signIn} disabled={disabled} style={btnPrimary}>
-              {status.kind === "gettingNonce"
-                ? "Getting nonce…"
-                : status.kind === "signing"
-                ? "Signing…"
-                : status.kind === "verifying"
-                ? "Verifying…"
-                : "Sign In"}
-            </button>
-          </>
+          <div style={placeholderBox}>No wallet connected.</div>
         )}
-      </div>
 
-      <div style={{ marginTop: 16 }}>
+        {/* Actions */}
+        <div style={btnRow}>
+          {showInstall ? (
+            <>
+              <a href="https://phantom.app/" target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>
+                <button style={btnPrimary}>Install Phantom</button>
+              </a>
+              <button style={btnGhost} onClick={() => window.location.reload()}>Reload</button>
+            </>
+          ) : !address ? (
+            <button onClick={connectWallet} disabled={isBusy} style={btnPrimary}>
+              {status.kind === "connecting" ? "Connecting…" : "Connect Phantom"}
+            </button>
+          ) : (
+            <>
+              <button onClick={disconnect} disabled={isBusy} style={btnGhost}>
+                Disconnect
+              </button>
+              <button onClick={signIn} disabled={isBusy} style={btnPrimary}>
+                {status.kind === "gettingNonce"
+                  ? "Getting nonce…"
+                  : status.kind === "signing"
+                  ? "Signing…"
+                  : status.kind === "verifying"
+                  ? "Verifying…"
+                  : "Sign In"}
+              </button>
+            </>
+          )}
+        </div>
+
+        {/* Feedback */}
         {status.kind === "error" && (
           <div style={errorBox}>
-            <strong>Auth Error:</strong> {status.message}
+            <strong>Auth error:</strong> {status.message}
             {status.hint && <div style={{ marginTop: 6, opacity: 0.85 }}>{status.hint}</div>}
             <div style={{ marginTop: 6, opacity: 0.8 }}>
-              If it fails at “Getting nonce…” or “Verifying…”, fix CORS + cookies on your API (SameSite=None; Secure; credentials; allowed origin = your Vercel URL).
+              If it fails at “Getting nonce…” or “Verifying…”, ensure your API CORS allows your Vercel domain and sets cookies with <code>SameSite=None; Secure</code>.
             </div>
           </div>
         )}
-        {(status.kind === "connecting" ||
-          status.kind === "gettingNonce" ||
-          status.kind === "signing" ||
-          status.kind === "verifying") && (
-          <div>Working… ({status.kind})</div>
+
+        {isBusy && (
+          <div style={busyRow}>
+            <div style={spinner} />
+            <div style={{ marginLeft: 8 }}>
+              {status.kind === "connecting" && "Connecting to Phantom…"}
+              {status.kind === "gettingNonce" && "Requesting server nonce…"}
+              {status.kind === "signing" && "Waiting for wallet signature…"}
+              {status.kind === "verifying" && "Verifying signature…"}
+            </div>
+          </div>
+        )}
+
+        {!isProd && (
+          <div style={devNote}>
+            API: <code style={mono}>{API_BASE || "(missing VITE_API_BASE)"}</code>
+          </div>
         )}
       </div>
-
-      {!isProd && (
-        <p style={{ marginTop: 16, fontSize: 12, opacity: 0.8 }}>
-          Dev: API = <code style={mono}>{API_BASE || "(missing VITE_API_BASE)"}</code>
-        </p>
-      )}
     </div>
   );
 }
 
-/** styles */
+/* --------------------------------- styles -------------------------------- */
+const pageWrap: React.CSSProperties = {
+  minHeight: "100svh",
+  display: "grid",
+  placeItems: "center",
+  background:
+    "radial-gradient(1200px 600px at 10% -10%, rgba(168,85,247,.15), transparent 60%), radial-gradient(1000px 500px at 110% 110%, rgba(34,197,94,.12), transparent 60%), linear-gradient(180deg, #0b0b0b, #111)",
+  color: "#e5e7eb",
+};
 const card: React.CSSProperties = {
-  maxWidth: 520,
-  margin: "24px auto",
-  padding: 16,
-  border: "1px solid rgba(0,0,0,0.1)",
-  borderRadius: 12,
+  width: "min(560px, 92vw)",
+  background: "rgba(20,20,20,.8)",
+  border: "1px solid rgba(255,255,255,.08)",
+  borderRadius: 16,
+  padding: 20,
+  boxShadow: "0 10px 40px rgba(0,0,0,.35)",
+  backdropFilter: "blur(6px)",
 };
+const brandRow: React.CSSProperties = { display: "flex", gap: 14, alignItems: "center", marginBottom: 10 };
+const logoCircle: React.CSSProperties = {
+  width: 44, height: 44, borderRadius: "50%", background: "#0f172a", display: "grid", placeItems: "center",
+  border: "1px solid rgba(255,255,255,.1)", position: "relative", overflow: "hidden"
+};
+const stripe: React.CSSProperties = { width: 26, height: 4, borderRadius: 4, background: "linear-gradient(90deg, #a78bfa, #34d399)" };
+const h1: React.CSSProperties = { margin: 0, fontSize: 22, letterSpacing: .2 };
+const subtle: React.CSSProperties = { margin: 0, opacity: .75, fontSize: 13 };
+const infoRow: React.CSSProperties = {
+  display: "flex", gap: 10, alignItems: "center", padding: "10px 12px", background: "rgba(255,255,255,.03)",
+  border: "1px solid rgba(255,255,255,.08)", borderRadius: 10, wordBreak: "break-all", marginTop: 8
+};
+const label: React.CSSProperties = { opacity: .75, fontSize: 12 };
+const mono: React.CSSProperties = { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" };
+const placeholderBox: React.CSSProperties = {
+  marginTop: 8, padding: "10px 12px", borderRadius: 10, border: "1px dashed rgba(255,255,255,.15)", opacity: .7
+};
+const btnRow: React.CSSProperties = { display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" };
 const btnPrimary: React.CSSProperties = {
-  padding: "10px 14px",
-  borderRadius: 8,
-  border: "1px solid #111",
-  background: "#111",
-  color: "#fff",
-  cursor: "pointer",
+  padding: "10px 14px", borderRadius: 10, border: "1px solid #6ee7b7", background: "linear-gradient(90deg,#22c55e,#a78bfa)",
+  color: "#0a0a0a", fontWeight: 600, cursor: "pointer"
 };
-const btnSecondary: React.CSSProperties = {
-  padding: "10px 14px",
-  borderRadius: 8,
-  border: "1px solid #999",
-  background: "#fff",
-  color: "#111",
-  cursor: "pointer",
+const btnGhost: React.CSSProperties = {
+  padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(255,255,255,.15)", background: "transparent",
+  color: "#e5e7eb", cursor: "pointer"
 };
-const mono: React.CSSProperties = { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", wordBreak: "break-all" };
-const muted: React.CSSProperties = { margin: "8px 0", color: "#6b7280" };
 const errorBox: React.CSSProperties = {
-  background: "rgba(255,0,0,0.08)",
-  border: "1px solid rgba(255,0,0,0.3)",
-  color: "#700",
-  padding: 10,
-  borderRadius: 8,
+  marginTop: 12, background: "rgba(239,68,68,.1)", border: "1px solid rgba(239,68,68,.4)", color: "#fecaca",
+  padding: 12, borderRadius: 10
 };
+const busyRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, marginTop: 10, opacity: .95 };
+const spinner: React.CSSProperties = {
+  width: 16, height: 16, borderRadius: "50%",
+  border: "2px solid rgba(255,255,255,.25)", borderTopColor: "#fff", animation: "spin .8s linear infinite"
+} as any;
+const devNote: React.CSSProperties = { fontSize: 12, opacity: .7, marginTop: 12 };
