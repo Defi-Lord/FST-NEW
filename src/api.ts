@@ -68,13 +68,28 @@ export async function safeJson(r: Response) {
   }
 }
 
-// Generic GET with credentials (for cookie-based flows)
+// ---------- Low-level HTTP ----------
 async function apiGet<T>(path: string): Promise<T> {
   if (!API_BASE) throw new Error("VITE_API_BASE is missing in production.");
   const res = await fetch(`${API_BASE}${path}`, { credentials: "include" });
   if (!res.ok) {
     const err = await safeJson(res);
     throw new Error(err?.error || `GET ${path} failed (${res.status})`);
+  }
+  return res.json() as Promise<T>;
+}
+
+async function apiPost<T>(path: string, body: unknown): Promise<T> {
+  if (!API_BASE) throw new Error("VITE_API_BASE is missing in production.");
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
+  if (!res.ok) {
+    const err = await safeJson(res);
+    throw new Error(err?.error || `POST ${path} failed (${res.status})`);
   }
   return res.json() as Promise<T>;
 }
@@ -87,45 +102,25 @@ export async function getNonce(wallet: string) {
 }
 
 export async function verifySignature(payload: { walletAddress: string; signatureBase58: string }) {
-  if (!API_BASE) throw new Error("VITE_API_BASE is missing in production.");
-  const res = await fetch(`${API_BASE}/auth/verify`, {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    const err = await safeJson(res);
-    throw new Error(err?.error || `Verify failed (${res.status})`);
-  }
-  return (await res.json()) as {
-    ok: true;
-    token?: string;
-    userId: string;
-    walletId: string;
-    expiresAt?: string;
-  };
+  return apiPost<{ ok: true; token?: string; userId: string; walletId: string; expiresAt?: string }>(
+    "/auth/verify",
+    payload
+  );
 }
 
-// ---------- FPL-style data helpers expected by pages_HomeHub.tsx ----------
-// We’ll try your API endpoints first; if they 404/fail, we fall back to local mock JSON:
-//   public/mock/fixtures.json
-//   public/mock/bootstrap-static.json
-// (These files exist in your repo per your earlier commit.)
-
-/** Fetch all fixtures */
+// ---------- FPL/public data helpers (used by HomeHub) ----------
+/** Fetch all fixtures, with local mock fallback */
 export async function fetchFixtures(): Promise<any> {
   try {
     return await apiGet<any>("/public/fixtures");
   } catch {
-    // fallback to local mock
     const r = await fetch("/mock/fixtures.json");
     if (!r.ok) throw new Error(`fixtures mock not found (${r.status})`);
     return r.json();
   }
 }
 
-/** Fetch bootstrap (static metadata) */
+/** Fetch bootstrap static, with local mock fallback */
 export async function fetchBootstrap(): Promise<any> {
   try {
     return await apiGet<any>("/public/bootstrap");
@@ -136,7 +131,69 @@ export async function fetchBootstrap(): Promise<any> {
   }
 }
 
-/** Fetch per-player summary; falls back to API-only (no local mock for a specific id) */
+/** Fetch a player's summary (API only) */
 export async function fetchElementSummary(elementId: number | string): Promise<any> {
   return apiGet<any>(`/public/player/${encodeURIComponent(String(elementId))}/summary`);
+}
+
+// ---------- Contest types + endpoints (expected by HomeHub) ----------
+export type Contest = {
+  id: string;
+  title: string;
+  description?: string | null;
+  entryFee?: number | null; // in your currency units
+  currency?: string | null; // e.g. "NGN", "USDC"
+  status?: "upcoming" | "open" | "closed" | "settled";
+  startsAt?: string | null;
+  endsAt?: string | null;
+  // add/relax fields as your API returns; TS is structural and will accept supersets
+};
+
+/** List public contests */
+export async function listContests(): Promise<Contest[]> {
+  // your repo contained apps/api/src/routes/contests.public.ts — exposing /public/contests
+  return apiGet<Contest[]>("/public/contests");
+}
+
+/** Join a contest (free or paid — server decides) */
+export async function joinContest(contestId: string, payload?: Record<string, unknown>) {
+  // assumes an authenticated user (JWT cookie or Authorization header on server side)
+  return apiPost<{ ok: true; joinId: string; requiresPayment?: boolean; reference?: string }>(
+    `/contests/${encodeURIComponent(contestId)}/join`,
+    payload ?? {}
+  );
+}
+
+/** Start a paid join flow (creates a payment intent / reference) */
+export async function startPaidJoin(contestId: string) {
+  // some backends expose /payments/start or /contests/:id/pay/start — choose the common one:
+  try {
+    return await apiPost<{ ok: true; reference: string; redirectUrl?: string }>(
+      "/payments/start",
+      { contestId }
+    );
+  } catch {
+    // fallback to a contest-scoped endpoint if your API uses it
+    return apiPost<{ ok: true; reference: string; redirectUrl?: string }>(
+      `/contests/${encodeURIComponent(contestId)}/payments/start`,
+      {}
+    );
+  }
+}
+
+/** Verify a paid join (called after user completes payment) */
+export async function verifyPaidJoin(reference: string) {
+  // common pattern: /payments/verify with { reference }
+  try {
+    return await apiPost<{ ok: true; status: "paid" | "pending" | "failed"; joinId?: string }>(
+      "/payments/verify",
+      { reference }
+    );
+  } catch {
+    // fallback to alt path
+    return apiPost<{ ok: true; status: "paid" | "pending" | "failed"; joinId?: string }>(
+      `/payments/verify/${encodeURIComponent(reference)}`,
+      {}
+    );
+  }
 }
