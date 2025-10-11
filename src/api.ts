@@ -1,12 +1,6 @@
 // src/api.ts — production-safe API helpers (NO React, NO JSX)
 
 // ---------- API base ----------
-/**
- * In production, you MUST set VITE_API_BASE in Vercel to your Render API URL
- *   e.g. https://your-api.onrender.com
- * In dev, defaults to http://localhost:4000 if unset.
- * We intentionally DO NOT fall back to window.location.origin in prod.
- */
 function computeApiBase() {
   const envBase = (import.meta as any)?.env?.VITE_API_BASE as string | undefined;
   const isProd = !!import.meta.env?.PROD;
@@ -15,7 +9,7 @@ function computeApiBase() {
 
   if (!base || base.trim().length === 0) {
     if (isProd) {
-      base = ""; // force explicit config in prod
+      base = "";
       if (typeof window !== "undefined") {
         // eslint-disable-next-line no-console
         console.warn(
@@ -68,7 +62,7 @@ export async function safeJson(r: Response) {
   }
 }
 
-// ---------- Low-level HTTP ----------
+// Generic GET with credentials (for cookie-based flows)
 async function apiGet<T>(path: string): Promise<T> {
   if (!API_BASE) throw new Error("VITE_API_BASE is missing in production.");
   const res = await fetch(`${API_BASE}${path}`, { credentials: "include" });
@@ -79,6 +73,7 @@ async function apiGet<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// Generic POST with credentials
 async function apiPost<T>(path: string, body: unknown): Promise<T> {
   if (!API_BASE) throw new Error("VITE_API_BASE is missing in production.");
   const res = await fetch(`${API_BASE}${path}`, {
@@ -102,25 +97,27 @@ export async function getNonce(wallet: string) {
 }
 
 export async function verifySignature(payload: { walletAddress: string; signatureBase58: string }) {
-  return apiPost<{ ok: true; token?: string; userId: string; walletId: string; expiresAt?: string }>(
-    "/auth/verify",
-    payload
-  );
+  return apiPost<{
+    ok: true;
+    token?: string;
+    userId: string;
+    walletId: string;
+    expiresAt?: string;
+  }>(`/auth/verify`, payload);
 }
 
-// ---------- FPL/public data helpers (used by HomeHub) ----------
-/** Fetch all fixtures, with local mock fallback */
+// ---------- FPL-style data helpers used by pages_HomeHub.tsx ----------
 export async function fetchFixtures(): Promise<any> {
   try {
     return await apiGet<any>("/public/fixtures");
   } catch {
+    // fallback to local mock (served from /public)
     const r = await fetch("/mock/fixtures.json");
     if (!r.ok) throw new Error(`fixtures mock not found (${r.status})`);
     return r.json();
   }
 }
 
-/** Fetch bootstrap static, with local mock fallback */
 export async function fetchBootstrap(): Promise<any> {
   try {
     return await apiGet<any>("/public/bootstrap");
@@ -131,69 +128,47 @@ export async function fetchBootstrap(): Promise<any> {
   }
 }
 
-/** Fetch a player's summary (API only) */
 export async function fetchElementSummary(elementId: number | string): Promise<any> {
   return apiGet<any>(`/public/player/${encodeURIComponent(String(elementId))}/summary`);
 }
 
-// ---------- Contest types + endpoints (expected by HomeHub) ----------
+// ---------- Contests (public) ----------
 export type Contest = {
   id: string;
-  title: string;
-  description?: string | null;
-  entryFee?: number | null; // in your currency units
-  currency?: string | null; // e.g. "NGN", "USDC"
-  status?: "upcoming" | "open" | "closed" | "settled";
-  startsAt?: string | null;
-  endsAt?: string | null;
-  // add/relax fields as your API returns; TS is structural and will accept supersets
+  name: string;
+  status?: "upcoming" | "live" | "completed";
+  entryFee?: number;
+  currency?: string;
+  startsAt?: string; // ISO
+  endsAt?: string;   // ISO
+  [k: string]: any;  // allow extra fields from your API
 };
 
-/** List public contests */
+/** GET list of contests */
 export async function listContests(): Promise<Contest[]> {
-  // your repo contained apps/api/src/routes/contests.public.ts — exposing /public/contests
+  // Adjust endpoint to your server route; from your repo it likely lives under /public/contests
   return apiGet<Contest[]>("/public/contests");
 }
 
-/** Join a contest (free or paid — server decides) */
-export async function joinContest(contestId: string, payload?: Record<string, unknown>) {
-  // assumes an authenticated user (JWT cookie or Authorization header on server side)
-  return apiPost<{ ok: true; joinId: string; requiresPayment?: boolean; reference?: string }>(
-    `/contests/${encodeURIComponent(contestId)}/join`,
+/** POST free join (or zero-fee) */
+export async function joinContest(contestId: string, payload?: Record<string, any>) {
+  // Common pattern: /public/contests/:id/join
+  return apiPost<{ ok: true; entryId: string }>(`/public/contests/${encodeURIComponent(contestId)}/join`, payload ?? {});
+}
+
+/** POST start a paid join (creates a payment intent / reference) */
+export async function startPaidJoin(contestId: string, payload?: Record<string, any>) {
+  // Common pattern: /public/contests/:id/join/start
+  return apiPost<{ ok: true; reference?: string; paymentUrl?: string }>(
+    `/public/contests/${encodeURIComponent(contestId)}/join/start`,
     payload ?? {}
   );
 }
 
-/** Start a paid join flow (creates a payment intent / reference) */
-export async function startPaidJoin(contestId: string) {
-  // some backends expose /payments/start or /contests/:id/pay/start — choose the common one:
-  try {
-    return await apiPost<{ ok: true; reference: string; redirectUrl?: string }>(
-      "/payments/start",
-      { contestId }
-    );
-  } catch {
-    // fallback to a contest-scoped endpoint if your API uses it
-    return apiPost<{ ok: true; reference: string; redirectUrl?: string }>(
-      `/contests/${encodeURIComponent(contestId)}/payments/start`,
-      {}
-    );
-  }
-}
-
-/** Verify a paid join (called after user completes payment) */
-export async function verifyPaidJoin(reference: string) {
-  // common pattern: /payments/verify with { reference }
-  try {
-    return await apiPost<{ ok: true; status: "paid" | "pending" | "failed"; joinId?: string }>(
-      "/payments/verify",
-      { reference }
-    );
-  } catch {
-    // fallback to alt path
-    return apiPost<{ ok: true; status: "paid" | "pending" | "failed"; joinId?: string }>(
-      `/payments/verify/${encodeURIComponent(reference)}`,
-      {}
-    );
-  }
+/** GET/POST verify a paid join after payment completes */
+export async function verifyPaidJoin(contestId: string, reference: string) {
+  // Common pattern: /public/contests/:id/join/verify?reference=...
+  return apiGet<{ ok: true; entryId: string }>(
+    `/public/contests/${encodeURIComponent(contestId)}/join/verify?reference=${encodeURIComponent(reference)}`
+  );
 }
