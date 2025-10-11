@@ -1,10 +1,10 @@
-import React, { useCallback, useMemo, useState } from "react";
+// src/api.ts — production-safe API helpers (NO React, NO JSX)
 
 /**
- * API base:
- * - In production, you MUST set VITE_API_BASE to your Render API URL (e.g. https://your-api.onrender.com).
- * - In dev (vite), we default to http://localhost:4000 if VITE_API_BASE is not set.
- * - We DO NOT fall back to window.location.origin in prod (to avoid pointing at the frontend by mistake).
+ * In production, you MUST set VITE_API_BASE in Vercel to your Render API URL
+ *   e.g. https://your-api.onrender.com
+ * In dev, defaults to http://localhost:4000 if unset.
+ * We intentionally DO NOT fall back to window.location.origin in prod.
  */
 function computeApiBase() {
   const envBase = (import.meta as any)?.env?.VITE_API_BASE as string | undefined;
@@ -14,31 +14,29 @@ function computeApiBase() {
 
   if (!base || base.trim().length === 0) {
     if (isProd) {
-      // In production, require explicit VITE_API_BASE to avoid calling the frontend domain as API
-      base = "";
-      // Optional: console warning to aid debugging
+      base = ""; // force explicit config in prod
       if (typeof window !== "undefined") {
         // eslint-disable-next-line no-console
         console.warn(
-          "VITE_API_BASE is not set in production. Set it to your Render API URL in Vercel project settings."
+          "VITE_API_BASE is not set in production. Set it to your Render API URL in Vercel → Settings → Environment Variables."
         );
       }
     } else {
-      // local dev default
       base = "http://localhost:4000";
     }
   }
-
   return base.replace(/\/+$/, "");
 }
 
-const API_BASE = computeApiBase();
+export const API_BASE = computeApiBase();
+export const isProd = !!import.meta.env?.PROD;
 
-/** Minimal helpers */
-const toBytes = (s: string) => new TextEncoder().encode(s);
+/** --- helpers --- **/
+
+export const toBytes = (s: string) => new TextEncoder().encode(s);
 
 /** base58 encoder (bitcoin alphabet) — no external deps */
-function base58Encode(bytes: Uint8Array): string {
+export function base58Encode(bytes: Uint8Array): string {
   const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
   if (bytes.length === 0) return "";
   let zeros = 0;
@@ -61,250 +59,51 @@ function base58Encode(bytes: Uint8Array): string {
   return digits.reverse().map((d) => ALPHABET[d]).join("");
 }
 
-/** Phantom types (subset) */
-type PhantomProvider = {
-  isPhantom?: boolean;
-  publicKey?: { toBase58: () => string } | { toString: () => string };
-  connect: (opts?: any) => Promise<{ publicKey: { toBase58: () => string } | { toString: () => string } }>;
-  disconnect?: () => Promise<void>;
-  signMessage?: (message: Uint8Array, displayEncoding?: string) => Promise<{ signature: Uint8Array }>;
-};
-
-declare global {
-  interface Window {
-    solana?: PhantomProvider;
-  }
-}
-
-type Status =
-  | { kind: "idle" }
-  | { kind: "connecting" }
-  | { kind: "gettingNonce" }
-  | { kind: "signing" }
-  | { kind: "verifying" }
-  | { kind: "success"; userId: string; token?: string }
-  | { kind: "error"; message: string };
-
-export default function SignInWithWallet() {
-  const [status, setStatus] = useState<Status>({ kind: "idle" });
-  const [address, setAddress] = useState<string>("");
-
-  const phantom = useMemo(() => (typeof window !== "undefined" ? window.solana : undefined), []);
-
-  const connectWallet = useCallback(async (): Promise<string> => {
-    if (!phantom || !phantom.connect) {
-      throw new Error("Phantom wallet not found. Install the Phantom extension/app and refresh.");
-    }
-    setStatus({ kind: "connecting" });
-    const res = await phantom.connect({ onlyIfTrusted: false });
-    const pkAny = res?.publicKey as any;
-    const pub =
-      (pkAny?.toBase58?.() as string | undefined) ??
-      (pkAny?.toString?.() as string | undefined) ??
-      "";
-    if (!pub) throw new Error("Could not read wallet address from Phantom.");
-    setAddress(pub);
-    return pub;
-  }, [phantom]);
-
-  const signIn = useCallback(async () => {
-    try {
-      if (!API_BASE) {
-        throw new Error(
-          "VITE_API_BASE is missing. In Vercel (Production), set it to your Render API URL and redeploy."
-        );
-      }
-
-      const wallet = address || (await connectWallet());
-
-      // 1) Get nonce + message (stores HttpOnly nonce cookie)
-      setStatus({ kind: "gettingNonce" });
-      const nonceUrl = `${API_BASE}/auth/nonce?wallet=${encodeURIComponent(wallet)}`;
-      const nonceRes = await fetch(nonceUrl, { method: "GET", credentials: "include" });
-      if (!nonceRes.ok) {
-        const err = await safeJson(nonceRes);
-        throw new Error(err?.error || `Nonce request failed (${nonceRes.status})`);
-      }
-      const nonceData = (await nonceRes.json()) as {
-        message: string;
-        expiresInSec: number;
-      };
-      const message = nonceData.message;
-      if (!message || typeof message !== "string") {
-        throw new Error("Nonce response is missing the signing message.");
-      }
-
-      // 2) Sign exact message
-      if (!phantom?.signMessage) {
-        throw new Error("Phantom `signMessage` not available. Enable ‘Message Signing’ in Phantom → Settings → Developer.");
-      }
-      setStatus({ kind: "signing" });
-      const { signature } = await phantom.signMessage!(toBytes(message), "utf8");
-      const signatureBase58 = base58Encode(signature);
-
-      // 3) Verify signature (returns JWT + sets auth cookie if server does that)
-      setStatus({ kind: "verifying" });
-      const verifyRes = await fetch(`${API_BASE}/auth/verify`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ walletAddress: wallet, signatureBase58 }),
-      });
-      if (!verifyRes.ok) {
-        const err = await safeJson(verifyRes);
-        throw new Error(err?.error || `Verify failed (${verifyRes.status})`);
-      }
-      const data = (await verifyRes.json()) as {
-        ok: boolean;
-        token?: string;
-        userId: string;
-        walletId: string;
-        expiresAt?: string;
-      };
-
-      // Optional: store token for Authorization: Bearer flows (server also sets cookie)
-      if (data.token && typeof window !== "undefined" && window?.localStorage) {
-        try {
-          window.localStorage.setItem("authToken", data.token);
-        } catch {}
-      }
-
-      setStatus({ kind: "success", userId: data.userId, token: data.token });
-    } catch (e: any) {
-      setStatus({ kind: "error", message: e?.message || "Something went wrong" });
-    }
-  }, [address, connectWallet, phantom]);
-
-  const disconnect = useCallback(async () => {
-    try {
-      await phantom?.disconnect?.();
-    } catch {}
-    setAddress("");
-    setStatus({ kind: "idle" });
-  }, [phantom]);
-
-  const disabled =
-    status.kind === "connecting" ||
-    status.kind === "gettingNonce" ||
-    status.kind === "signing" ||
-    status.kind === "verifying";
-
-  const isProd = !!import.meta.env?.PROD;
-
-  return (
-    <div
-      style={{
-        maxWidth: 520,
-        margin: "24px auto",
-        padding: 16,
-        border: "1px solid rgba(0,0,0,0.1)",
-        borderRadius: 12,
-      }}
-    >
-      <h2 style={{ marginTop: 0 }}>Sign in with Solana</h2>
-
-      {address ? (
-        <p style={{ margin: "8px 0", wordBreak: "break-all" }}>
-          Connected: <strong>{address}</strong>
-        </p>
-      ) : (
-        <p style={{ margin: "8px 0" }}>No wallet connected.</p>
-      )}
-
-      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-        {!address ? (
-          <button onClick={connectWallet} disabled={disabled} style={btnPrimary}>
-            {status.kind === "connecting" ? "Connecting…" : "Connect Phantom"}
-          </button>
-        ) : (
-          <>
-            <button onClick={disconnect} disabled={disabled} style={btnSecondary}>
-              Disconnect
-            </button>
-            <button onClick={signIn} disabled={disabled} style={btnPrimary}>
-              {status.kind === "gettingNonce"
-                ? "Getting nonce…"
-                : status.kind === "signing"
-                ? "Signing…"
-                : status.kind === "verifying"
-                ? "Verifying…"
-                : "Sign In"}
-            </button>
-          </>
-        )}
-      </div>
-
-      <div style={{ marginTop: 16 }}>
-        {status.kind === "error" && (
-          <div style={errorBox}>
-            <strong>Auth Error:</strong> {status.message}
-          </div>
-        )}
-        {status.kind === "success" && (
-          <div style={okBox}>
-            <div>✅ Signed in!</div>
-            <div>User ID: {status.userId}</div>
-            {status.token && (
-              <div style={{ marginTop: 6, wordBreak: "break-all" }}>
-                JWT: <code>{status.token}</code>
-              </div>
-            )}
-          </div>
-        )}
-        {(status.kind === "connecting" ||
-          status.kind === "gettingNonce" ||
-          status.kind === "signing" ||
-          status.kind === "verifying") && <div>Working…</div>}
-      </div>
-
-      {/* Debug info is visible only in dev */}
-      {!isProd && (
-        <p style={{ marginTop: 16, fontSize: 12, opacity: 0.8 }}>
-          Dev: API = <code>{API_BASE || "(missing VITE_API_BASE)"}</code> • If signing fails, enable{" "}
-          <em>Message Signing</em> in Phantom (Settings → Developer).
-        </p>
-      )}
-    </div>
-  );
-}
-
-/** --- little UI styles --- */
-const btnPrimary: React.CSSProperties = {
-  padding: "10px 14px",
-  borderRadius: 8,
-  border: "1px solid #111",
-  background: "#111",
-  color: "#fff",
-  cursor: "pointer",
-};
-const btnSecondary: React.CSSProperties = {
-  padding: "10px 14px",
-  borderRadius: 8,
-  border: "1px solid #999",
-  background: "#fff",
-  color: "#111",
-  cursor: "pointer",
-};
-const errorBox: React.CSSProperties = {
-  background: "rgba(255,0,0,0.08)",
-  border: "1px solid rgba(255,0,0,0.3)",
-  color: "#700",
-  padding: 10,
-  borderRadius: 8,
-};
-const okBox: React.CSSProperties = {
-  background: "rgba(0,180,0,0.08)",
-  border: "1px solid rgba(0,180,0,0.35)",
-  color: "#064",
-  padding: 10,
-  borderRadius: 8,
-};
-
 /** Safe JSON parse from fetch error bodies */
-async function safeJson(r: Response) {
+export async function safeJson(r: Response) {
   try {
     return await r.json();
   } catch {
     return undefined;
   }
+}
+
+/** --- API calls --- **/
+
+export async function getNonce(wallet: string) {
+  if (!API_BASE) throw new Error("VITE_API_BASE is missing in production.");
+  const url = `${API_BASE}/auth/nonce?wallet=${encodeURIComponent(wallet)}`;
+  const res = await fetch(url, { method: "GET", credentials: "include" });
+  if (!res.ok) {
+    const err = await safeJson(res);
+    throw new Error(err?.error || `Nonce failed (${res.status})`);
+  }
+  return (await res.json()) as {
+    wallet: string;
+    nonce: string;
+    message: string;
+    expiresInSec: number;
+  };
+}
+
+export async function verifySignature(payload: { walletAddress: string; signatureBase58: string }) {
+  if (!API_BASE) throw new Error("VITE_API_BASE is missing in production.");
+  const url = `${API_BASE}/auth/verify`;
+  const res = await fetch(url, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await safeJson(res);
+    throw new Error(err?.error || `Verify failed (${res.status})`);
+  }
+  return (await res.json()) as {
+    ok: true;
+    token?: string;
+    userId: string;
+    walletId: string;
+    expiresAt?: string;
+  };
 }
