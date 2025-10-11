@@ -1,42 +1,67 @@
 import React, { useCallback, useMemo, useState } from "react";
 
 /**
- * Reads your API base URL from Vite env.
- * Set this in:
- *  - Vercel (Production): VITE_API_BASE=https://fst-api.onrender.com
- *  - Local .env:           VITE_API_BASE=http://localhost:4000  (or your Render URL)
+ * API base:
+ * - In production, set VITE_API_BASE to your Render API URL (e.g. https://your-api.onrender.com).
+ * - In dev, defaults to http://localhost:4000 if not set.
+ * - We DO NOT fall back to window.location.origin in prod (prevents pointing to the frontend by mistake).
  */
-const API_BASE =
-  (import.meta as any)?.env?.VITE_API_BASE?.replace(/\/+$/, "") ||
-  (typeof window !== "undefined" ? `${window.location.origin}` : "");
+function computeApiBase() {
+  const envBase = (import.meta as any)?.env?.VITE_API_BASE as string | undefined;
+  const isProd = !!import.meta.env?.PROD;
 
-/** Minimal helpers */
-const toBytes = (s: string) => new TextEncoder().encode(s);
+  let base: string | undefined = envBase;
 
-/** Base58 encoding for the signature we send to the API. */
-function base58Encode(bytes: Uint8Array): string {
-  // lightweight base58 encoder (bitcoin alphabet)
-  const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-  let x = BigInt(0);
-  for (let i = 0; i < bytes.length; i++) x = (x << BigInt(8)) + BigInt(bytes[i]);
-  let out = "";
-  while (x > 0) {
-    const mod = Number(x % BigInt(58));
-    out = ALPHABET[mod] + out;
-    x = x / BigInt(58);
+  if (!base || base.trim().length === 0) {
+    if (isProd) {
+      base = ""; // force explicit config in prod
+      if (typeof window !== "undefined") {
+        // eslint-disable-next-line no-console
+        console.warn("VITE_API_BASE is not set in production. Set it to your Render API URL in Vercel.");
+      }
+    } else {
+      base = "http://localhost:4000";
+    }
   }
-  // leading zeros → "1"
-  for (let i = 0; i < bytes.length && bytes[i] === 0; i++) out = "1" + out;
-  return out || "1";
+  return base.replace(/\/+$/, "");
 }
 
-/** Phantom types (very small subset) */
+const API_BASE = computeApiBase();
+
+/** Helpers */
+const toBytes = (s: string) => new TextEncoder().encode(s);
+
+/** base58 (no external deps) */
+function base58Encode(bytes: Uint8Array): string {
+  const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  if (bytes.length === 0) return "";
+  let zeros = 0;
+  while (zeros < bytes.length && bytes[zeros] === 0) zeros++;
+  const input = bytes.slice();
+  const digits: number[] = [];
+  for (let i = zeros; i < input.length; i++) {
+    let carry = input[i];
+    for (let j = 0; j < digits.length; j++) {
+      const x = digits[j] * 256 + carry;
+      digits[j] = Math.floor(x / 58);
+      carry = x % 58;
+    }
+    while (carry > 0) {
+      digits.push(carry % 58);
+      carry = Math.floor(carry / 58);
+    }
+  }
+  for (let k = 0; k < zeros; k++) digits.push(0);
+  return digits.reverse().map((d) => ALPHABET[d]).join("");
+}
+
+/** Phantom (subset) */
 type PhantomProvider = {
   isPhantom?: boolean;
-  publicKey?: { toBase58: () => string };
-  connect: () => Promise<{ publicKey: { toBase58: () => string } }>;
+  publicKey?: { toBase58: () => string } | { toString: () => string };
+  connect: (opts?: any) => Promise<{ publicKey: { toBase58: () => string } | { toString: () => string } }>;
   disconnect?: () => Promise<void>;
-  signMessage?: (message: Uint8Array, display?: string) => Promise<{ signature: Uint8Array }>;
+  signMessage?: (message: Uint8Array, displayEncoding?: string) => Promise<{ signature: Uint8Array }>;
 };
 
 declare global {
@@ -54,7 +79,7 @@ type Status =
   | { kind: "success"; userId: string; token?: string }
   | { kind: "error"; message: string };
 
-export default function SignInWithWallet() {
+export default function Page_SignInWithSolana() {
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [address, setAddress] = useState<string>("");
 
@@ -62,11 +87,15 @@ export default function SignInWithWallet() {
 
   const connectWallet = useCallback(async (): Promise<string> => {
     if (!phantom || !phantom.connect) {
-      throw new Error("Phantom wallet not found. Install Phantom extension/app.");
+      throw new Error("Phantom wallet not found. Install the Phantom extension/app and refresh.");
     }
     setStatus({ kind: "connecting" });
-    const res = await phantom.connect();
-    const pub = res.publicKey?.toBase58();
+    const res = await phantom.connect({ onlyIfTrusted: false });
+    const pkAny = res?.publicKey as any;
+    const pub =
+      (pkAny?.toBase58?.() as string | undefined) ??
+      (pkAny?.toString?.() as string | undefined) ??
+      "";
     if (!pub) throw new Error("Could not read wallet address from Phantom.");
     setAddress(pub);
     return pub;
@@ -74,35 +103,36 @@ export default function SignInWithWallet() {
 
   const signIn = useCallback(async () => {
     try {
-      if (!API_BASE) throw new Error("Missing VITE_API_BASE. Set it in your environment.");
+      if (!API_BASE) {
+        throw new Error("VITE_API_BASE is missing. In Vercel, set it to your Render API URL and redeploy.");
+      }
+
       const wallet = address || (await connectWallet());
 
-      // 1) Get nonce + message (sets HttpOnly nonce cookie)
+      // 1) Nonce + message (sets HttpOnly nonce cookie)
       setStatus({ kind: "gettingNonce" });
       const nonceUrl = `${API_BASE}/auth/nonce?wallet=${encodeURIComponent(wallet)}`;
-      const nonceRes = await fetch(nonceUrl, {
-        method: "GET",
-        credentials: "include", // important so the nonce cookie is stored
-      });
+      const nonceRes = await fetch(nonceUrl, { method: "GET", credentials: "include" });
       if (!nonceRes.ok) {
         const err = await safeJson(nonceRes);
         throw new Error(err?.error || `Nonce request failed (${nonceRes.status})`);
       }
-      const { message } = (await nonceRes.json()) as { message: string };
+      const { message } = (await nonceRes.json()) as { message: string; expiresInSec: number };
+      if (!message) throw new Error("Nonce response missing message to sign.");
 
       // 2) Sign exact message
       if (!phantom?.signMessage) {
-        throw new Error("Phantom `signMessage` not available. Enable 'Message Signing' in Phantom.");
+        throw new Error("Phantom `signMessage` not available. Enable ‘Message Signing’ in Phantom → Settings → Developer.");
       }
       setStatus({ kind: "signing" });
       const { signature } = await phantom.signMessage!(toBytes(message), "utf8");
       const signatureBase58 = base58Encode(signature);
 
-      // 3) Verify signature (returns JWT + sets auth cookie if you kept that)
+      // 3) Verify signature (returns JWT + sets auth cookie if enabled)
       setStatus({ kind: "verifying" });
       const verifyRes = await fetch(`${API_BASE}/auth/verify`, {
         method: "POST",
-        credentials: "include", // keep cookies flowing (nonce/auth)
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ walletAddress: wallet, signatureBase58 }),
       });
@@ -115,22 +145,21 @@ export default function SignInWithWallet() {
         token?: string;
         userId: string;
         walletId: string;
+        expiresAt?: string;
       };
 
-      // store token for API Authorization: Bearer <token> flows
-      if (data.token) {
+      // Optional: store token for Authorization header flows
+      if (data.token && typeof window !== "undefined" && window?.localStorage) {
         try {
-          localStorage.setItem("authToken", data.token);
-        } catch {
-          // ignore if localStorage not available
-        }
+          window.localStorage.setItem("authToken", data.token);
+        } catch {}
       }
 
       setStatus({ kind: "success", userId: data.userId, token: data.token });
     } catch (e: any) {
       setStatus({ kind: "error", message: e?.message || "Something went wrong" });
     }
-  }, [API_BASE, address, connectWallet, phantom]);
+  }, [address, connectWallet, phantom]);
 
   const disconnect = useCallback(async () => {
     try {
@@ -140,23 +169,17 @@ export default function SignInWithWallet() {
     setStatus({ kind: "idle" });
   }, [phantom]);
 
-  const disabled = status.kind === "connecting" || status.kind === "gettingNonce" || status.kind === "signing" || status.kind === "verifying";
+  const disabled =
+    status.kind === "connecting" ||
+    status.kind === "gettingNonce" ||
+    status.kind === "signing" ||
+    status.kind === "verifying";
+
+  const isProd = !!import.meta.env?.PROD;
 
   return (
-    <div
-      style={{
-        maxWidth: 520,
-        margin: "24px auto",
-        padding: 16,
-        border: "1px solid rgba(0,0,0,0.1)",
-        borderRadius: 12,
-      }}
-    >
+    <div style={wrap}>
       <h2 style={{ marginTop: 0 }}>Sign in with Solana</h2>
-
-      <p style={{ margin: "8px 0", wordBreak: "break-all" }}>
-        API: <code>{API_BASE || "(missing VITE_API_BASE)"}</code>
-      </p>
 
       {address ? (
         <p style={{ margin: "8px 0", wordBreak: "break-all" }}>
@@ -168,15 +191,15 @@ export default function SignInWithWallet() {
 
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
         {!address ? (
-          <button onClick={connectWallet} disabled={disabled} style={btnStyle}>
+          <button onClick={connectWallet} disabled={disabled} style={btnPrimary}>
             {status.kind === "connecting" ? "Connecting…" : "Connect Phantom"}
           </button>
         ) : (
           <>
-            <button onClick={disconnect} disabled={disabled} style={btnStyleSecondary}>
+            <button onClick={disconnect} disabled={disabled} style={btnSecondary}>
               Disconnect
             </button>
-            <button onClick={signIn} disabled={disabled} style={btnStyle}>
+            <button onClick={signIn} disabled={disabled} style={btnPrimary}>
               {status.kind === "gettingNonce"
                 ? "Getting nonce…"
                 : status.kind === "signing"
@@ -212,15 +235,26 @@ export default function SignInWithWallet() {
           status.kind === "verifying") && <div>Working…</div>}
       </div>
 
-      <p style={{ marginTop: 16, fontSize: 12, opacity: 0.8 }}>
-        Tip: if signing fails, open Phantom → Settings → Developer → enable <em>Message Signing</em>.
-      </p>
+      {/* Dev-only debug (hidden in production) */}
+      {!isProd && (
+        <p style={{ marginTop: 16, fontSize: 12, opacity: 0.8 }}>
+          Dev: Using API <code>{API_BASE || "(missing VITE_API_BASE)"}</code>. If signing fails, enable{" "}
+          <em>Message Signing</em> in Phantom (Settings → Developer).
+        </p>
+      )}
     </div>
   );
 }
 
-/** --- little UI styles --- */
-const btnStyle: React.CSSProperties = {
+/** --- styles --- */
+const wrap: React.CSSProperties = {
+  maxWidth: 520,
+  margin: "24px auto",
+  padding: 16,
+  border: "1px solid rgba(0,0,0,0.1)",
+  borderRadius: 12,
+};
+const btnPrimary: React.CSSProperties = {
   padding: "10px 14px",
   borderRadius: 8,
   border: "1px solid #111",
@@ -228,7 +262,7 @@ const btnStyle: React.CSSProperties = {
   color: "#fff",
   cursor: "pointer",
 };
-const btnStyleSecondary: React.CSSProperties = {
+const btnSecondary: React.CSSProperties = {
   padding: "10px 14px",
   borderRadius: 8,
   border: "1px solid #999",
@@ -251,7 +285,7 @@ const okBox: React.CSSProperties = {
   borderRadius: 8,
 };
 
-/** Safe JSON parse from fetch error bodies */
+/** Safe JSON parse for error bodies */
 async function safeJson(r: Response) {
   try {
     return await r.json();
