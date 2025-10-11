@@ -1,7 +1,8 @@
 import React, { useCallback, useMemo, useState } from "react";
 
 /** Resolve API base strictly from Vite env. */
-const API_BASE = ((import.meta as any)?.env?.VITE_API_BASE as string | undefined)?.replace(/\/+$/, "") ?? "";
+const API_BASE =
+  ((import.meta as any)?.env?.VITE_API_BASE as string | undefined)?.replace(/\/+$/, "") ?? "";
 
 /** Helpers */
 const toBytes = (s: string) => new TextEncoder().encode(s);
@@ -130,11 +131,11 @@ export default function SignInWithWallet() {
       const { signature } = await phantom.signMessage!(toBytes(message), "utf8");
       const signatureBase58 = base58Encode(signature);
 
-      // 3) Verify (send NONCE in body!)
+      // 3) Verify (send NONCE in body! — cookie-free)
       setStatus({ kind: "verifying" });
       const verifyRes = await fetch(`${API_BASE}/auth/verify`, {
         method: "POST",
-        credentials: "omit", // we’re not depending on cookies
+        credentials: "omit",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ walletAddress: wallet, signatureBase58, nonce: n }),
       });
@@ -148,7 +149,7 @@ export default function SignInWithWallet() {
       }
       const ok = (await verifyRes.json()) as { ok: boolean; userId: string; token?: string };
 
-      // Persist token (optional — API also set cookie, but we’re cookie-free now)
+      // Persist token (optional — some APIs also set a cookie)
       if (ok?.token) {
         try {
           window.localStorage?.setItem("authToken", ok.token);
@@ -158,9 +159,8 @@ export default function SignInWithWallet() {
 
       setStatus({ kind: "success", userId: ok.userId });
 
-      // Redirect to HomeHub (change to your real route)
-      // If you use react-router, prefer: navigate('/homehub')
-      window.location.href = "/homehub";
+      // Redirect to Home (adjust if your route is different)
+      window.location.href = "/home";
     } catch (e: any) {
       const msg = e?.message || "Something went wrong";
       const hint = (e && e.hint) || undefined;
@@ -221,11 +221,13 @@ export default function SignInWithWallet() {
         <div style={{ minHeight: 20, marginTop: 12 }}>
           {status.kind === "error" && (
             <div style={errBox}>
-              <div><strong>Auth error:</strong> {status.message}</div>
+              <div>
+                <strong>Auth error:</strong> {status.message}
+              </div>
               {status.hint && <div style={{ opacity: 0.9, marginTop: 6 }}>{status.hint}</div>}
             </div>
           )}
-          {status.kind === "success" && <div style={okBox}>✅ Signed in!</div>}
+          {status.kind === "success" && <div style={okBox}>✅ Signed in! Redirecting…</div>}
         </div>
 
         <div style={note}>
@@ -235,7 +237,11 @@ export default function SignInWithWallet() {
         {!isProd && (
           <div style={devBox}>
             Dev info: API_BASE = <code>{API_BASE || "(missing VITE_API_BASE)"}</code>{" "}
-            {nonce ? <>• nonce=<code>{nonce}</code></> : null}
+            {nonce ? (
+              <>
+                • nonce=<code>{nonce}</code>
+              </>
+            ) : null}
           </div>
         )}
       </div>

@@ -7,7 +7,7 @@ import { createRoot } from 'react-dom/client'
 import { AppProvider, useApp, type ContestRealm } from './state'
 
 import Landing from './pages_Landing'
-// import ConnectWallet from './pages_ConnectWallet' // removed to avoid double popups
+// import ConnectWallet from './pages_ConnectWallet' // keep disabled to avoid double popups
 import HomeHub from './pages_HomeHub'
 import ContestTypes from './pages_ContestTypes'
 import TeamSelection from './pages_TeamSelection'
@@ -41,7 +41,7 @@ type Route =
   | 'stats' | 'howToPlay' | 'about' | 'contact' | 'admin'
   | 'history' | 'transfers' | 'profile'
 
-const API_BASE = (import.meta as any).env?.VITE_API_BASE || 'http://localhost:4000'
+const API_BASE = (import.meta as any).env?.VITE_API_BASE || ''
 const SOLANA_RPC = (import.meta as any).env?.VITE_SOLANA_RPC || 'https://api.devnet.solana.com'
 
 /** ---- token helpers (reads both keys) ---- */
