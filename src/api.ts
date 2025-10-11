@@ -220,6 +220,14 @@ export type NewContestInput = {
 
 export type UpdateContestInput = Partial<NewContestInput> & { status?: Contest["status"] };
 
+export type User = {
+  id: string;
+  wallet?: string;
+  email?: string;
+  createdAt?: string;
+  [k: string]: any;
+};
+
 export async function adminHealth(): Promise<{ ok: boolean; [k: string]: any }> {
   // Prefer admin health; if not present on server, fallback to public health
   try {
@@ -239,4 +247,28 @@ export async function updateContest(id: string, patch: UpdateContestInput) {
 
 export async function deleteContest(id: string) {
   return authDelete<{ ok: true }>(`/admin/contests/${encodeURIComponent(id)}`);
+}
+
+/**
+ * Toggle contest active/visibility/status.
+ * If your backend expects a boolean "enabled", pass it; otherwise the endpoint can just flip server-side.
+ */
+export async function toggleContest(id: string, enabled?: boolean) {
+  return authPost<Contest>(`/admin/contests/${encodeURIComponent(id)}/toggle`, enabled === undefined ? {} : { enabled });
+}
+
+/** Admin: list all users */
+export async function listUsers(): Promise<User[]> {
+  return authGet<User[]>("/admin/users");
+}
+
+/** Contest leaderboard.
+ * Try admin endpoint first, then fall back to a public leaderboard if available.
+ */
+export async function getContestLeaderboard(contestId: string): Promise<any> {
+  try {
+    return await authGet<any>(`/admin/contests/${encodeURIComponent(contestId)}/leaderboard`);
+  } catch {
+    return apiGet<any>(`/public/contests/${encodeURIComponent(contestId)}/leaderboard`);
+  }
 }
