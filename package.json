@@ -13,7 +13,8 @@
     "dev:api": "npm -w apps/api run dev",
     "build:api": "npm -w apps/api run build",
     "prisma:generate": "npm -w apps/api run prisma:generate",
-    "prisma:migrate": "npm -w apps/api run prisma:migrate"
+    "prisma:migrate": "npm -w apps/api run prisma:migrate",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@solana/spl-token": "^0.4.7",
