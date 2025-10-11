@@ -5,14 +5,17 @@ import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import nacl from 'tweetnacl';
 import bs58 from 'bs58';
-import cors from 'cors';
 import { TextEncoder } from 'util';
+
+// Use CommonJS-style require for cors to avoid TS overload/import issues in some setups
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const cors = require('cors');
 
 /* ---------------- ENV ---------------- */
 const PORT = Number(process.env.PORT || 4000);
 
 // Comma-separated list (supports wildcards), e.g.:
-// CORS_ORIGIN="https://fst-mini-app.vercel.app,https://*.vercel.app"
+//   CORS_ORIGIN="https://fst-mini-app.vercel.app,https://*.vercel.app"
 const RAW_ORIGINS = (process.env.CORS_ORIGIN || '').trim();
 
 // Use a LONG random string (≥64 chars) in production!
@@ -25,7 +28,7 @@ const ALLOWED = RAW_ORIGINS
   .filter(Boolean);
 
 function originAllowed(origin?: string | null) {
-  if (!origin) return false; // no origin header (like curl/postman) -> treat as not CORS
+  if (!origin) return false; // Requests without Origin are not CORS (curl, health checks, etc.)
   for (const pat of ALLOWED) {
     if (pat.includes('*')) {
       const re = new RegExp('^' + pat.replace(/\./g, '\\.').replace(/\*/g, '.*') + '$');
@@ -43,22 +46,20 @@ app.set('trust proxy', 1);
 app.use(express.json());
 app.use(cookieParser());
 
-/** Use official cors() to avoid TS overload issues */
-app.use(
-  cors({
-    origin: (origin, cb) => {
-      if (!ALLOWED.length) return cb(null, false);
-      if (originAllowed(origin)) return cb(null, true);
-      return cb(null, false);
-    },
-    credentials: true, // we *can* allow cookies; frontend uses credentials: 'omit', so it's fine either way
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-  })
-);
-
-// Some hosting/CDNs need explicit OPTIONS route for wildcard
-app.options('*', cors());
+// --- CORS (via require('cors')) ---
+// Keep credentials allowed (harmless even though frontend uses credentials:'omit')
+const corsOptions = {
+  origin: (origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => {
+    if (!ALLOWED.length) return cb(null, false);
+    if (originAllowed(origin || null)) return cb(null, true);
+    return cb(null, false);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+};
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // explicit preflight responder
 
 /* -------------- HELPERS -------------- */
 const te = new TextEncoder();
@@ -91,8 +92,8 @@ app.get('/public/healthz', (_req, res) => {
 
 /**
  * GET /auth/nonce?wallet=<base58>
- * Sets a cross-site HttpOnly cookie 'nonce' AND returns { nonce, message } in JSON.
- * (Frontend does NOT rely on the cookie; it echoes `nonce` back in POST /auth/verify.)
+ * Best-effort sets a cross-site HttpOnly cookie 'nonce' AND always returns { nonce, message } in JSON.
+ * (Frontend does NOT rely on cookie; it echoes `nonce` back in POST /auth/verify.)
  */
 app.get('/auth/nonce', (req, res) => {
   const wallet = String(req.query.wallet || '').trim();
@@ -116,7 +117,7 @@ app.get('/auth/nonce', (req, res) => {
 /**
  * POST /auth/verify
  * Body: { walletAddress, signatureBase58, nonce? }
- * Accepts nonce from cookie OR body (so it works even if cookie is blocked).
+ * Accepts nonce from cookie OR body (works even if cookie is blocked).
  */
 app.post('/auth/verify', (req, res) => {
   const { walletAddress, signatureBase58, nonce: nonceFromBody } = req.body || {};
@@ -129,7 +130,7 @@ app.post('/auth/verify', (req, res) => {
   const nonce = nonceCookie || (typeof nonceFromBody === 'string' ? nonceFromBody : '');
 
   if (!nonce) {
-    // Important: do NOT say "Missing nonce cookie" anymore; we accept either cookie or body.
+    // IMPORTANT: never return "Missing nonce cookie" — we accept cookie OR body
     return res.status(400).json({ error: 'Missing nonce (cookie or body)' });
   }
 
@@ -152,7 +153,7 @@ app.post('/auth/verify', (req, res) => {
 
   const token = signJwt(walletAddress);
 
-  // Optional cookie; your SPA also saves token to localStorage
+  // Optional cookie; your SPA also stores token in localStorage
   res.cookie('auth', token, {
     httpOnly: true,
     secure: true,
