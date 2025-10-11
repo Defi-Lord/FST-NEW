@@ -1,296 +1,310 @@
-// src/api.ts
+import React, { useCallback, useMemo, useState } from "react";
 
-/** Base URL for your API (Vite env or localhost) */
-export const API_BASE: string =
-  (import.meta as any).env?.VITE_API_BASE || 'http://localhost:4000';
+/**
+ * API base:
+ * - In production, you MUST set VITE_API_BASE to your Render API URL (e.g. https://your-api.onrender.com).
+ * - In dev (vite), we default to http://localhost:4000 if VITE_API_BASE is not set.
+ * - We DO NOT fall back to window.location.origin in prod (to avoid pointing at the frontend by mistake).
+ */
+function computeApiBase() {
+  const envBase = (import.meta as any)?.env?.VITE_API_BASE as string | undefined;
+  const isProd = !!import.meta.env?.PROD;
 
-/** Read JWT from localStorage (safe) */
-export function getToken(): string {
-  try {
-    return localStorage.getItem('auth_token') || '';
-  } catch {
-    return '';
-  }
-}
+  let base: string | undefined = envBase;
 
-/** Build headers with Authorization + JSON when body is present */
-function buildHeaders(init?: RequestInit): Headers {
-  const headers = new Headers(init?.headers || {});
-  const token = getToken();
-  if (token && !headers.has('Authorization')) {
-    headers.set('Authorization', `Bearer ${token}`);
-  }
-  if (!headers.has('Content-Type') && init?.body) {
-    headers.set('Content-Type', 'application/json');
-  }
-  return headers;
-}
-
-/** Core fetch wrapper with consistent error handling */
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    credentials: 'include',
-    ...init,
-    headers: buildHeaders(init),
-  });
-
-  if (res.ok) {
-    if (res.status === 204) return undefined as unknown as T;
-    return (await res.json()) as T;
-  }
-
-  // Collect best possible error message
-  let message = `HTTP ${res.status}`;
-  try {
-    const txt = await res.text();
-    if (txt) {
-      try {
-        const j = JSON.parse(txt);
-        message = j?.error || txt;
-      } catch {
-        message = txt;
+  if (!base || base.trim().length === 0) {
+    if (isProd) {
+      // In production, require explicit VITE_API_BASE to avoid calling the frontend domain as API
+      base = "";
+      // Optional: console warning to aid debugging
+      if (typeof window !== "undefined") {
+        // eslint-disable-next-line no-console
+        console.warn(
+          "VITE_API_BASE is not set in production. Set it to your Render API URL in Vercel project settings."
+        );
       }
+    } else {
+      // local dev default
+      base = "http://localhost:4000";
     }
-  } catch {}
-  throw new Error(message);
+  }
+
+  return base.replace(/\/+$/, "");
 }
 
-/* ==========================================================
-   Convenience layer
-   ========================================================== */
-export const api = {
-  get:  <T>(p: string, init?: RequestInit) =>
-    request<T>(p, { ...(init || {}), method: 'GET' }),
+const API_BASE = computeApiBase();
 
-  post: <T>(p: string, body?: unknown, init?: RequestInit) =>
-    request<T>(p, {
-      ...(init || {}),
-      method: 'POST',
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    }),
+/** Minimal helpers */
+const toBytes = (s: string) => new TextEncoder().encode(s);
 
-  patch:<T>(p: string, body?: unknown, init?: RequestInit) =>
-    request<T>(p, {
-      ...(init || {}),
-      method: 'PATCH',
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    }),
-
-  delete:<T>(p: string, init?: RequestInit) =>
-    request<T>(p, { ...(init || {}), method: 'DELETE' }),
-};
-
-/* ==========================================================
-   Auth / Session
-   ========================================================== */
-export type IntrospectResponse = { ok: boolean; payload?: any; error?: string };
-
-export function getMe() {
-  return api.get<{ ok: true; user: { id: string; createdAt?: string; updatedAt?: string; displayName?: string | null } }>(
-    '/me'
-  );
-}
-
-export function authIntrospect(token?: string) {
-  const t = token || getToken();
-  return api.post<IntrospectResponse>('/auth/introspect', { token: t });
-}
-
-/* ==========================================================
-   Admin: Health, Contests, Users, Leaderboard
-   ========================================================== */
-export function adminHealth() {
-  return api.get<{ ok: true; admin: true }>('/admin/healthz');
-}
-
-export type Contest = {
-  id: string;
-  title: string;
-  realm: 'FREE' | 'WEEKLY' | 'MONTHLY' | 'SEASONAL' | string;
-  entryFee: number;
-  active: boolean;
-  createdAt: string;
-};
-
-export function listContests() {
-  return api.get<{ ok: true; contests: Contest[] }>('/admin/contests');
-}
-
-export function createContest(input: {
-  title: string;
-  realm: Contest['realm'];
-  entryFee: number;
-  active?: boolean;
-}) {
-  return api.post<{ ok: true; contest: Contest }>('/admin/contests', input);
-}
-
-export function toggleContest(id: string, active: boolean) {
-  return api.patch<{ ok: true; contest: Contest }>(
-    `/admin/contests/${id}/toggle`,
-    { active }
-  );
-}
-
-export function deleteContest(id: string) {
-  return api.delete<{ ok: true }>(`/admin/contests/${id}`);
-}
-
-/* ===== Leaderboard (admin + public) ===== */
-export type LeaderboardEntry = {
-  rank: number;
-  userId: string;
-  displayName?: string | null;
-  points: number;
-  teamName?: string | null;
-  entryId?: string;
-  createdAt?: string;
-};
-
-export function getContestLeaderboardAdmin(
-  contestId: string,
-  opts?: { limit?: number; offset?: number }
-) {
-  const q = new URLSearchParams();
-  if (opts?.limit != null) q.set('limit', String(opts.limit));
-  if (opts?.offset != null) q.set('offset', String(opts.offset));
-  const qs = q.toString() ? `?${q}` : '';
-  return api.get<{
-    ok: true;
-    contestId: string;
-    entries: LeaderboardEntry[];
-    total: number;
-    offset: number;
-    limit: number | null;
-  }>(`/admin/contests/${encodeURIComponent(contestId)}/leaderboard${qs}`);
-}
-
-export function getPublicLeaderboard(
-  contestId: string,
-  opts?: { limit?: number; offset?: number }
-) {
-  const q = new URLSearchParams();
-  if (opts?.limit != null) q.set('limit', String(opts.limit));
-  if (opts?.offset != null) q.set('offset', String(opts.offset));
-  const qs = q.toString() ? `?${q}` : '';
-  return api.get<{
-    ok: true;
-    contestId: string;
-    entries: LeaderboardEntry[];
-    total: number;
-    offset: number;
-    limit: number;
-  }>(`/contests/${encodeURIComponent(contestId)}/leaderboard${qs}`);
-}
-
-/** ✅ Compat alias (if your Admin page still imports this name) */
-export function getContestLeaderboard(
-  contestId: string,
-  opts?: { limit?: number; offset?: number }
-) {
-  return getContestLeaderboardAdmin(contestId, opts);
-}
-
-/* ===== Admin: Users ===== */
-export type AdminUser = {
-  id: string;
-  createdAt: string;
-  updatedAt: string;
-  displayName: string | null;
-};
-
-export function listUsers() {
-  return api.get<{ ok: true; users: AdminUser[] }>('/admin/users');
-}
-
-export function getUserDetail(id: string) {
-  return api.get<{ ok: true; user: AdminUser; contests: any[] }>(
-    `/admin/users/${encodeURIComponent(id)}`
-  );
-}
-
-/* ==========================================================
-   Public: Join Flow (FREE + PAID)
-   ========================================================== */
-
-/** FREE join (entryFee = 0 contests) */
-export function joinContest(contestId: string, team?: any) {
-  return api.post<{ ok: true; entry: any; created: boolean }>(
-    `/contests/${encodeURIComponent(contestId)}/join`,
-    team ? { team } : undefined
-  );
-}
-
-/** Start PAID join ($5 worth of SOL) — server returns instructions */
-export function startPaidJoin(contestId: string) {
-  return api.post<{
-    ok: true;
-    to: string;               // treasury address
-    amountLamports: number;   // lamports to send (>= MIN_LAMPORTS_FOR_5USD)
-    memo: string;             // optional memo to include
-    from: string;             // your wallet (server echoes it)
-  }>(`/contests/${encodeURIComponent(contestId)}/join/start`);
-}
-
-/** Verify PAID join — you pass the on-chain signature after user sends SOL */
-export function verifyPaidJoin(contestId: string, signature: string) {
-  return api.post<{ ok: true; entry: any; created: boolean }>(
-    `/contests/${encodeURIComponent(contestId)}/join/verify`,
-    { signature }
-  );
-}
-
-/* ==========================================================
-   History (per-user, per-contest) — rounds & points
-   ========================================================== */
-
-/** Returns this user's round-by-round scores for a contest */
-export function getMyHistory(contestId: string) {
-  return api.get<{
-    ok: true;
-    contest: { id: string; realm: string; title: string };
-    scores: Array<{ round: number; points: number; createdAt: string }>;
-  }>(`/contests/${encodeURIComponent(contestId)}/my/history`);
-}
-
-/* ==========================================================
-   FPL proxies (used by your HomeHub)
-   ========================================================== */
-export function fetchBootstrap() {
-  return api.get<any>('/fpl/api/bootstrap-static/');
-}
-
-export function fetchFixtures(query?: Record<string, string | number | boolean>) {
-  const q =
-    query && Object.keys(query).length
-      ? `?${new URLSearchParams(
-          Object.entries(query).map(([k, v]) => [k, String(v)])
-        )}`
-      : '';
-  return api.get<any>(`/fpl/api/fixtures/${q}`);
-}
-
-export function fetchElementSummary(id: string | number) {
-  return api.get<any>(`/fpl/api/element-summary/${id}/`);
-}
-
-/* ==========================================================
-   Utilities
-   ========================================================== */
-export function signOut() {
-  try {
-    localStorage.removeItem('auth_token');
-    localStorage.removeItem('sol_wallet');
-  } catch {}
-}
-
-export async function withAuthGuard<T>(fn: () => Promise<T>): Promise<T> {
-  try {
-    return await fn();
-  } catch (e: any) {
-    if (String(e?.message || '').startsWith('HTTP 401')) {
-      signOut();
+/** base58 encoder (bitcoin alphabet) — no external deps */
+function base58Encode(bytes: Uint8Array): string {
+  const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  if (bytes.length === 0) return "";
+  let zeros = 0;
+  while (zeros < bytes.length && bytes[zeros] === 0) zeros++;
+  const input = bytes.slice();
+  const digits: number[] = [];
+  for (let i = zeros; i < input.length; i++) {
+    let carry = input[i];
+    for (let j = 0; j < digits.length; j++) {
+      const x = digits[j] * 256 + carry;
+      digits[j] = Math.floor(x / 58);
+      carry = x % 58;
     }
-    throw e;
+    while (carry > 0) {
+      digits.push(carry % 58);
+      carry = Math.floor(carry / 58);
+    }
+  }
+  for (let k = 0; k < zeros; k++) digits.push(0);
+  return digits.reverse().map((d) => ALPHABET[d]).join("");
+}
+
+/** Phantom types (subset) */
+type PhantomProvider = {
+  isPhantom?: boolean;
+  publicKey?: { toBase58: () => string } | { toString: () => string };
+  connect: (opts?: any) => Promise<{ publicKey: { toBase58: () => string } | { toString: () => string } }>;
+  disconnect?: () => Promise<void>;
+  signMessage?: (message: Uint8Array, displayEncoding?: string) => Promise<{ signature: Uint8Array }>;
+};
+
+declare global {
+  interface Window {
+    solana?: PhantomProvider;
+  }
+}
+
+type Status =
+  | { kind: "idle" }
+  | { kind: "connecting" }
+  | { kind: "gettingNonce" }
+  | { kind: "signing" }
+  | { kind: "verifying" }
+  | { kind: "success"; userId: string; token?: string }
+  | { kind: "error"; message: string };
+
+export default function SignInWithWallet() {
+  const [status, setStatus] = useState<Status>({ kind: "idle" });
+  const [address, setAddress] = useState<string>("");
+
+  const phantom = useMemo(() => (typeof window !== "undefined" ? window.solana : undefined), []);
+
+  const connectWallet = useCallback(async (): Promise<string> => {
+    if (!phantom || !phantom.connect) {
+      throw new Error("Phantom wallet not found. Install the Phantom extension/app and refresh.");
+    }
+    setStatus({ kind: "connecting" });
+    const res = await phantom.connect({ onlyIfTrusted: false });
+    const pkAny = res?.publicKey as any;
+    const pub =
+      (pkAny?.toBase58?.() as string | undefined) ??
+      (pkAny?.toString?.() as string | undefined) ??
+      "";
+    if (!pub) throw new Error("Could not read wallet address from Phantom.");
+    setAddress(pub);
+    return pub;
+  }, [phantom]);
+
+  const signIn = useCallback(async () => {
+    try {
+      if (!API_BASE) {
+        throw new Error(
+          "VITE_API_BASE is missing. In Vercel (Production), set it to your Render API URL and redeploy."
+        );
+      }
+
+      const wallet = address || (await connectWallet());
+
+      // 1) Get nonce + message (stores HttpOnly nonce cookie)
+      setStatus({ kind: "gettingNonce" });
+      const nonceUrl = `${API_BASE}/auth/nonce?wallet=${encodeURIComponent(wallet)}`;
+      const nonceRes = await fetch(nonceUrl, { method: "GET", credentials: "include" });
+      if (!nonceRes.ok) {
+        const err = await safeJson(nonceRes);
+        throw new Error(err?.error || `Nonce request failed (${nonceRes.status})`);
+      }
+      const nonceData = (await nonceRes.json()) as {
+        message: string;
+        expiresInSec: number;
+      };
+      const message = nonceData.message;
+      if (!message || typeof message !== "string") {
+        throw new Error("Nonce response is missing the signing message.");
+      }
+
+      // 2) Sign exact message
+      if (!phantom?.signMessage) {
+        throw new Error("Phantom `signMessage` not available. Enable ‘Message Signing’ in Phantom → Settings → Developer.");
+      }
+      setStatus({ kind: "signing" });
+      const { signature } = await phantom.signMessage!(toBytes(message), "utf8");
+      const signatureBase58 = base58Encode(signature);
+
+      // 3) Verify signature (returns JWT + sets auth cookie if server does that)
+      setStatus({ kind: "verifying" });
+      const verifyRes = await fetch(`${API_BASE}/auth/verify`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ walletAddress: wallet, signatureBase58 }),
+      });
+      if (!verifyRes.ok) {
+        const err = await safeJson(verifyRes);
+        throw new Error(err?.error || `Verify failed (${verifyRes.status})`);
+      }
+      const data = (await verifyRes.json()) as {
+        ok: boolean;
+        token?: string;
+        userId: string;
+        walletId: string;
+        expiresAt?: string;
+      };
+
+      // Optional: store token for Authorization: Bearer flows (server also sets cookie)
+      if (data.token && typeof window !== "undefined" && window?.localStorage) {
+        try {
+          window.localStorage.setItem("authToken", data.token);
+        } catch {}
+      }
+
+      setStatus({ kind: "success", userId: data.userId, token: data.token });
+    } catch (e: any) {
+      setStatus({ kind: "error", message: e?.message || "Something went wrong" });
+    }
+  }, [address, connectWallet, phantom]);
+
+  const disconnect = useCallback(async () => {
+    try {
+      await phantom?.disconnect?.();
+    } catch {}
+    setAddress("");
+    setStatus({ kind: "idle" });
+  }, [phantom]);
+
+  const disabled =
+    status.kind === "connecting" ||
+    status.kind === "gettingNonce" ||
+    status.kind === "signing" ||
+    status.kind === "verifying";
+
+  const isProd = !!import.meta.env?.PROD;
+
+  return (
+    <div
+      style={{
+        maxWidth: 520,
+        margin: "24px auto",
+        padding: 16,
+        border: "1px solid rgba(0,0,0,0.1)",
+        borderRadius: 12,
+      }}
+    >
+      <h2 style={{ marginTop: 0 }}>Sign in with Solana</h2>
+
+      {address ? (
+        <p style={{ margin: "8px 0", wordBreak: "break-all" }}>
+          Connected: <strong>{address}</strong>
+        </p>
+      ) : (
+        <p style={{ margin: "8px 0" }}>No wallet connected.</p>
+      )}
+
+      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        {!address ? (
+          <button onClick={connectWallet} disabled={disabled} style={btnPrimary}>
+            {status.kind === "connecting" ? "Connecting…" : "Connect Phantom"}
+          </button>
+        ) : (
+          <>
+            <button onClick={disconnect} disabled={disabled} style={btnSecondary}>
+              Disconnect
+            </button>
+            <button onClick={signIn} disabled={disabled} style={btnPrimary}>
+              {status.kind === "gettingNonce"
+                ? "Getting nonce…"
+                : status.kind === "signing"
+                ? "Signing…"
+                : status.kind === "verifying"
+                ? "Verifying…"
+                : "Sign In"}
+            </button>
+          </>
+        )}
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        {status.kind === "error" && (
+          <div style={errorBox}>
+            <strong>Auth Error:</strong> {status.message}
+          </div>
+        )}
+        {status.kind === "success" && (
+          <div style={okBox}>
+            <div>✅ Signed in!</div>
+            <div>User ID: {status.userId}</div>
+            {status.token && (
+              <div style={{ marginTop: 6, wordBreak: "break-all" }}>
+                JWT: <code>{status.token}</code>
+              </div>
+            )}
+          </div>
+        )}
+        {(status.kind === "connecting" ||
+          status.kind === "gettingNonce" ||
+          status.kind === "signing" ||
+          status.kind === "verifying") && <div>Working…</div>}
+      </div>
+
+      {/* Debug info is visible only in dev */}
+      {!isProd && (
+        <p style={{ marginTop: 16, fontSize: 12, opacity: 0.8 }}>
+          Dev: API = <code>{API_BASE || "(missing VITE_API_BASE)"}</code> • If signing fails, enable{" "}
+          <em>Message Signing</em> in Phantom (Settings → Developer).
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** --- little UI styles --- */
+const btnPrimary: React.CSSProperties = {
+  padding: "10px 14px",
+  borderRadius: 8,
+  border: "1px solid #111",
+  background: "#111",
+  color: "#fff",
+  cursor: "pointer",
+};
+const btnSecondary: React.CSSProperties = {
+  padding: "10px 14px",
+  borderRadius: 8,
+  border: "1px solid #999",
+  background: "#fff",
+  color: "#111",
+  cursor: "pointer",
+};
+const errorBox: React.CSSProperties = {
+  background: "rgba(255,0,0,0.08)",
+  border: "1px solid rgba(255,0,0,0.3)",
+  color: "#700",
+  padding: 10,
+  borderRadius: 8,
+};
+const okBox: React.CSSProperties = {
+  background: "rgba(0,180,0,0.08)",
+  border: "1px solid rgba(0,180,0,0.35)",
+  color: "#064",
+  padding: 10,
+  borderRadius: 8,
+};
+
+/** Safe JSON parse from fetch error bodies */
+async function safeJson(r: Response) {
+  try {
+    return await r.json();
+  } catch {
+    return undefined;
   }
 }
