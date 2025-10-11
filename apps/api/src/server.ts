@@ -1,5 +1,5 @@
 // apps/api/src/server.ts
-import express, { type Request, type Response, type NextFunction, type RequestHandler } from 'express';
+import express from 'express';
 import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
@@ -42,8 +42,12 @@ app.set('trust proxy', 1);
 app.use(express.json());
 app.use(cookieParser());
 
-// CORS middleware (typed explicitly to avoid TS overload confusion)
-const corsHandler: RequestHandler = (req: Request, res: Response, next: NextFunction) => {
+// CORS middleware (typed as a plain function; mounted with a minimal cast to avoid TS overload noise)
+function corsHandler(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+): void {
   const origin = req.headers.origin as string | undefined;
   if (origin && originAllowed(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
@@ -57,15 +61,15 @@ const corsHandler: RequestHandler = (req: Request, res: Response, next: NextFunc
     return;
   }
   next();
-};
-app.use(corsHandler);
+}
+app.use(corsHandler as any);
 
 /* -------------- HELPERS -------------- */
 const te = new TextEncoder();
 const utf8 = (s: string) => te.encode(s);
 const signJwt = (sub: string) => jwt.sign({ sub, app: 'FST' }, JWT_SECRET, { expiresIn: '7d' });
 
-function tokenFromAuth(req: Request) {
+function tokenFromAuth(req: express.Request) {
   const h = req.headers.authorization || '';
   const m = /^Bearer\s+(.+)$/.exec(h);
   return m ? m[1] : null;
