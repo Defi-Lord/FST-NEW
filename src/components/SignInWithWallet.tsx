@@ -1,4 +1,3 @@
-// src/components/SignInWithWallet.tsx
 import React, { useCallback, useMemo, useState } from "react";
 
 /* ------------ Config ------------ */
@@ -62,7 +61,8 @@ export default function SignInWithWallet() {
   const connect = useCallback(async () => {
     if (!phantom?.connect) {
       throw Object.assign(new Error("Phantom wallet not detected."), {
-        hint: "Install Phantom and reload this page. On mobile, open this site in Phantom’s in-app browser.",
+        hint:
+          "Install Phantom and reload this page. On mobile, open this site in Phantom’s in-app browser.",
       });
     }
     setStatus({ kind: "connecting" });
@@ -85,21 +85,30 @@ export default function SignInWithWallet() {
       let wallet = address;
       if (!wallet) {
         await connect();
-        wallet = address || (phantom?.publicKey?.toBase58?.() ?? phantom?.publicKey?.toString?.() ?? "");
+        wallet =
+          address ||
+          (phantom?.publicKey?.toBase58?.() ?? phantom?.publicKey?.toString?.() ?? "");
         if (!wallet) throw new Error("Wallet not connected.");
       }
 
-      // 1) Get nonce + message (cookie + body fallback)
+      // 1) Get nonce + message
       setStatus({ kind: "gettingNonce" });
-      const nonceRes = await fetch(`${API_BASE}/auth/nonce?wallet=${encodeURIComponent(wallet)}`, {
-        method: "GET",
-        credentials: "include",
-      });
+      const nonceRes = await fetch(
+        `${API_BASE}/auth/nonce?wallet=${encodeURIComponent(wallet)}`,
+        {
+          method: "GET",
+          // *** IMPORTANT: do NOT send cookies; we don't rely on cross-site cookies anymore
+          credentials: "omit",
+        }
+      );
       if (!nonceRes.ok) {
         const msg = (await nonceRes.text().catch(() => "")) || `HTTP ${nonceRes.status}`;
         throw new Error(`Nonce failed: ${msg}`);
       }
-      const { message, nonce } = (await nonceRes.json()) as { message: string; nonce?: string };
+      const { message, nonce } = (await nonceRes.json()) as {
+        message: string;
+        nonce?: string;
+      };
       if (!message) throw new Error("Server did not return a signing message.");
 
       // 2) Sign exact message
@@ -112,17 +121,19 @@ export default function SignInWithWallet() {
       const { signature } = await phantom.signMessage(toBytes(message), "utf8");
       const signatureBase58 = base58Encode(signature);
 
-      // 3) Verify (sends nonce in body too, so it works even if cookie is blocked)
+      // 3) Verify (send nonce in body; no cookies required)
       setStatus({ kind: "verifying" });
       const verifyRes = await fetch(`${API_BASE}/auth/verify`, {
         method: "POST",
-        credentials: "include",
+        credentials: "omit", // <— no cookies; avoids credentialed CORS
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ walletAddress: wallet, signatureBase58, nonce }),
       });
       if (!verifyRes.ok) {
         let server = "";
-        try { server = (await verifyRes.json()).error || ""; } catch {}
+        try {
+          server = (await verifyRes.json()).error || "";
+        } catch {}
         const fb = await verifyRes.text().catch(() => "");
         throw new Error(`Verify failed: ${server || fb || `HTTP ${verifyRes.status}`}`);
       }
@@ -146,7 +157,9 @@ export default function SignInWithWallet() {
   }, [address, phantom, connect]);
 
   const disconnect = useCallback(async () => {
-    try { await phantom?.disconnect?.(); } catch {}
+    try {
+      await phantom?.disconnect?.();
+    } catch {}
     setAddress("");
     setStatus({ kind: "idle" });
   }, [phantom]);
@@ -183,11 +196,17 @@ export default function SignInWithWallet() {
             </button>
           ) : (
             <>
-              <button onClick={disconnect} disabled={busy} style={btnMuted}>Disconnect</button>
+              <button onClick={disconnect} disabled={busy} style={btnMuted}>
+                Disconnect
+              </button>
               <button onClick={signIn} disabled={busy} style={btnPrimary}>
-                {status.kind === "gettingNonce" ? "Getting nonce…" :
-                 status.kind === "signing"      ? "Signing…" :
-                 status.kind === "verifying"    ? "Verifying…" : "Sign In"}
+                {status.kind === "gettingNonce"
+                  ? "Getting nonce…"
+                  : status.kind === "signing"
+                  ? "Signing…"
+                  : status.kind === "verifying"
+                  ? "Verifying…"
+                  : "Sign In"}
               </button>
             </>
           )}
@@ -196,16 +215,19 @@ export default function SignInWithWallet() {
         {status.kind === "error" && (
           <div style={errBox}>
             <strong>Auth error:</strong> {status.message}
-            {status.hint && <div style={{ marginTop: 6, opacity: .85 }}>{status.hint}</div>}
-            <div style={{ marginTop: 6, opacity: .8 }}>
-              Using preview domains? Add <code>https://*.vercel.app</code> to <code>CORS_ORIGIN</code> on Render.
+            {status.hint && <div style={{ marginTop: 6, opacity: 0.85 }}>{status.hint}</div>}
+            <div style={{ marginTop: 6, opacity: 0.8 }}>
+              If you’re on a preview URL, ensure your API allows{" "}
+              <code>https://*.vercel.app</code> in <code>CORS_ORIGIN</code> (Render).
             </div>
           </div>
         )}
 
-        {busy && <div style={{ marginTop: 8, opacity: .8 }}>Working… ({status.kind})</div>}
+        {busy && <div style={{ marginTop: 8, opacity: 0.8 }}>Working… ({status.kind})</div>}
 
-        <div style={footNote}>Tip: If you don’t see the wallet popup, click the Phantom icon in your browser toolbar.</div>
+        <div style={footNote}>
+          Tip: If you don’t see the wallet popup, click the Phantom icon in your browser toolbar.
+        </div>
       </div>
     </div>
   );
@@ -220,7 +242,7 @@ const page: React.CSSProperties = {
     "radial-gradient(1200px 600px at 10% 0%, #3b82f620 0%, transparent 60%)," +
     "radial-gradient(1200px 600px at 90% 100%, #a855f720 0%, transparent 60%)," +
     "#0b0c10",
-  padding: 16
+  padding: 16,
 };
 const glass: React.CSSProperties = {
   width: "100%",
@@ -230,9 +252,14 @@ const glass: React.CSSProperties = {
   background: "linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.03))",
   border: "1px solid rgba(255,255,255,0.15)",
   boxShadow: "0 10px 30px rgba(0,0,0,0.4)",
-  color: "#e7e9ee"
+  color: "#e7e9ee",
 };
-const headRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 10, marginBottom: 6 };
+const headRow: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  marginBottom: 6,
+};
 const title: React.CSSProperties = { fontSize: 20, fontWeight: 700, margin: 0 };
 const sub: React.CSSProperties = { margin: 0, opacity: 0.8 };
 const pill: React.CSSProperties = {
@@ -244,11 +271,19 @@ const pill: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,.12)",
   borderRadius: 12,
   wordBreak: "break-all",
-  marginTop: 12
+  marginTop: 12,
 };
-const pillLabel: React.CSSProperties = { opacity: .75, fontSize: 12 };
-const pillMono: React.CSSProperties = { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" };
-const ghost: React.CSSProperties = { marginTop: 12, padding: "10px 12px", borderRadius: 12, border: "1px dashed rgba(255,255,255,.2)", opacity: .8 };
+const pillLabel: React.CSSProperties = { opacity: 0.75, fontSize: 12 };
+const pillMono: React.CSSProperties = {
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+};
+const ghost: React.CSSProperties = {
+  marginTop: 12,
+  padding: "10px 12px",
+  borderRadius: 12,
+  border: "1px dashed rgba(255,255,255,.2)",
+  opacity: 0.8,
+};
 const btnPrimary: React.CSSProperties = {
   padding: "10px 14px",
   borderRadius: 10,
@@ -257,8 +292,22 @@ const btnPrimary: React.CSSProperties = {
   color: "#fff",
   cursor: "pointer",
   fontWeight: 600,
-  boxShadow: "0 6px 20px rgba(124,58,237,.35)"
+  boxShadow: "0 6px 20px rgba(124,58,237,.35)",
 };
-const btnMuted: React.CSSProperties = { padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(255,255,255,.25)", background: "transparent", color: "#e7e9ee", cursor: "pointer" };
-const errBox: React.CSSProperties = { background: "rgba(255,0,0,0.08)", border: "1px solid rgba(255,0,0,0.3)", color: "#ffd5d5", padding: 10, borderRadius: 10, marginTop: 12 };
-const footNote: React.CSSProperties = { marginTop: 14, fontSize: 12, opacity: .75 };
+const btnMuted: React.CSSProperties = {
+  padding: "10px 14px",
+  borderRadius: 10,
+  border: "1px solid rgba(255,255,255,.25)",
+  background: "transparent",
+  color: "#e7e9ee",
+  cursor: "pointer",
+};
+const errBox: React.CSSProperties = {
+  background: "rgba(255,0,0,0.08)",
+  border: "1px solid rgba(255,0,0,0.3)",
+  color: "#ffd5d5",
+  padding: 10,
+  borderRadius: 10,
+  marginTop: 12,
+};
+const footNote: React.CSSProperties = { marginTop: 14, fontSize: 12, opacity: 0.75 };
