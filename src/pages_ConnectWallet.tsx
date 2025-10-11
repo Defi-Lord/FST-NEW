@@ -1,5 +1,52 @@
-import React, { useCallback, useMemo, useState } from "react";
-import { API_BASE, getNonce, verifySignature, toBytes, base58Encode, isProd } from "./api";
+import React from "react";
+
+/**
+ * This page is self-contained and includes the working sign-in component inline.
+ * If you already have a router that displays this page at /connect or /signin,
+ * this will ensure the new flow is actually used.
+ */
+
+// === Begin: Sign-in component (same as the working one) ===
+const API_BASE = ((import.meta as any)?.env?.VITE_API_BASE as string | undefined)?.replace(/\/+$/, "") ?? "";
+const toBytes = (s: string) => new TextEncoder().encode(s);
+
+function base58Encode(bytes: Uint8Array): string {
+  const A = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  if (!bytes.length) return "";
+  let zeros = 0;
+  while (zeros < bytes.length && bytes[zeros] === 0) zeros++;
+  const input = bytes.slice();
+  const digits: number[] = [];
+  for (let i = zeros; i < input.length; i++) {
+    let carry = input[i];
+    for (let j = 0; j < digits.length; j++) {
+      const x = digits[j] * 256 + carry;
+      digits[j] = Math.floor(x / 58);
+      carry = x % 58;
+    }
+    while (carry > 0) {
+      digits.push(carry % 58);
+      carry = Math.floor(carry / 58);
+    }
+  }
+  for (let k = 0; k < zeros; k++) digits.push(0);
+  return digits.reverse().map((d) => A[d]).join("");
+}
+
+type PhantomProvider = {
+  isPhantom?: boolean;
+  publicKey?: { toBase58?: () => string; toString?: () => string };
+  connect: (opts?: any) => Promise<{ publicKey: { toBase58?: () => string; toString?: () => string } }>;
+  disconnect?: () => Promise<void>;
+  signMessage?: (message: Uint8Array, displayEncoding?: string) => Promise<{ signature: Uint8Array }>;
+};
+
+declare global {
+  interface Window {
+    solana?: PhantomProvider;
+    phantom?: { solana?: PhantomProvider };
+  }
+}
 
 type Status =
   | { kind: "idle" }
@@ -7,268 +54,198 @@ type Status =
   | { kind: "gettingNonce" }
   | { kind: "signing" }
   | { kind: "verifying" }
-  | { kind: "success"; userId: string; token?: string }
+  | { kind: "success"; userId: string }
   | { kind: "error"; message: string; hint?: string };
 
-type PhantomLike = {
-  isPhantom?: boolean;
-  isConnected?: boolean;
-  publicKey?: { toBase58?: () => string; toString?: () => string };
-  connect: (opts?: any) => Promise<{ publicKey: { toBase58?: () => string; toString?: () => string } }>;
-  disconnect?: () => Promise<void>;
-  signMessage?: (message: Uint8Array, displayEncoding?: string) => Promise<{ signature: Uint8Array }>;
-  on?: (ev: string, cb: (...args: any[]) => void) => void;
-  off?: (ev: string, cb: (...args: any[]) => void) => void;
-};
-
-// ------- small helpers with timeout -------
-function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-    p.then((v) => {
-      clearTimeout(t);
-      resolve(v);
-    }).catch((e) => {
-      clearTimeout(t);
-      reject(e);
-    });
-  });
+function withHint(message: string, hint?: string) {
+  const e: any = new Error(message);
+  if (hint) e.hint = hint;
+  return e;
 }
+async function safeJson(r: Response) { try { return await r.json(); } catch { return undefined; } }
 
-// Many sites expose provider at window.solana; some wallets also put window.phantom?.solana
-function detectPhantom(): PhantomLike | undefined {
-  const w = typeof window !== "undefined" ? (window as any) : undefined;
-  if (!w) return undefined;
-  const p1 = w.solana;
-  const p2 = w.phantom?.solana;
-  if (p1?.isPhantom) return p1 as PhantomLike;
-  if (p2?.isPhantom) return p2 as PhantomLike;
-  // Some mobile in-app browsers inject provider without isPhantom flag
-  if (p1?.connect && (p1?.publicKey || p1?.isConnected)) return p1 as PhantomLike;
-  return undefined;
-}
+function SignInWithWallet() {
+  const [status, setStatus] = React.useState<Status>({ kind: "idle" });
+  const [address, setAddress] = React.useState("");
+  const [nonce, setNonce] = React.useState<string | null>(null);
 
-export default function SignInWithSolana() {
-  const [status, setStatus] = useState<Status>({ kind: "idle" });
-  const [address, setAddress] = useState<string>("");
+  const phantom = React.useMemo<PhantomProvider | undefined>(() => {
+    const w = typeof window !== "undefined" ? (window as any) : undefined;
+    return w?.solana?.isPhantom
+      ? (w.solana as PhantomProvider)
+      : w?.phantom?.solana?.isPhantom
+      ? (w.phantom.solana as PhantomProvider)
+      : undefined;
+  }, []);
 
-  const provider = useMemo(detectPhantom, []);
-
-  const connectWallet = useCallback(async (): Promise<string> => {
-    if (!provider || !provider.connect) {
-      throw Object.assign(new Error("Phantom wallet not detected."), {
-        hint:
-          "Install Phantom, then refresh. On desktop: https://phantom.app/ . On mobile, open this site inside Phantom’s in-app browser.",
-      });
-    }
+  const connectWallet = React.useCallback(async (): Promise<string> => {
+    if (!phantom?.connect) throw new Error("Phantom wallet not found. Install Phantom and refresh.");
     setStatus({ kind: "connecting" });
-    // connect() must be called from a user gesture (button click). We are in a handler.
-    const res = await withTimeout(provider.connect({ onlyIfTrusted: false }), 15000, "Wallet connect");
-    const pkAny = res?.publicKey as any;
-    const pub: string =
-      (pkAny?.toBase58?.() as string | undefined) ??
-      (pkAny?.toString?.() as string | undefined) ??
-      "";
+    const res = await phantom.connect({ onlyIfTrusted: false });
+    const pk: any = res?.publicKey;
+    const pub =
+      (typeof pk?.toBase58 === "function" && pk.toBase58()) ||
+      (typeof pk?.toString === "function" && pk.toString()) || "";
     if (!pub) throw new Error("Could not read wallet address from Phantom.");
     setAddress(pub);
     return pub;
-  }, [provider]);
+  }, [phantom]);
 
-  const signIn = useCallback(async () => {
+  const fetchNonce = React.useCallback(
+    async (wallet: string): Promise<{ message: string; nonce: string }> => {
+      if (!API_BASE) throw new Error("Missing VITE_API_BASE. Set it in your Vercel env and redeploy.");
+      setStatus({ kind: "gettingNonce" });
+      const url = `${API_BASE}/auth/nonce?wallet=${encodeURIComponent(wallet)}`;
+      const r = await fetch(url, { method: "GET", credentials: "omit" });
+      if (!r.ok) {
+        let hint = "";
+        if (r.status === 400) hint = "Check the wallet address you’re sending.";
+        if (r.status === 403) hint = "Origin not allowed by API CORS_ORIGIN.";
+        const body = await safeJson(r);
+        throw withHint(body?.error || `Nonce request failed (${r.status})`, hint);
+      }
+      const data = (await r.json()) as { wallet: string; nonce: string; message: string };
+      if (!data?.nonce || !data?.message) throw new Error("Nonce response missing required fields.");
+      setNonce(data.nonce);
+      return { message: data.message, nonce: data.nonce };
+    },
+    []
+  );
+
+  const signIn = React.useCallback(async () => {
     try {
-      if (!API_BASE) {
-        throw Object.assign(
-          new Error("Missing VITE_API_BASE in production."),
-          { hint: "In Vercel → Project → Settings → Environment Variables, set VITE_API_BASE to your Render API URL." }
+      const wallet = address || (await connectWallet());
+      const { message, nonce: n } = await fetchNonce(wallet);
+
+      if (!phantom?.signMessage) {
+        throw withHint(
+          "Phantom `signMessage` not available.",
+          "Open Phantom → Settings → Developer → enable Message Signing."
         );
       }
-
-      const wallet = address || (await connectWallet());
-
-      // 1) GET /auth/nonce (sets HttpOnly nonce cookie)
-      setStatus({ kind: "gettingNonce" });
-      const nonceData = await withTimeout(
-        getNonce(wallet),
-        15000,
-        "GET /auth/nonce"
-      );
-      if (!nonceData?.message) {
-        throw new Error("Server did not return a signing message.");
-      }
-
-      // 2) Sign exact message
-      if (!provider?.signMessage) {
-        throw Object.assign(new Error("Phantom cannot sign messages."), {
-          hint: "Open Phantom → Settings → Developer → enable Message Signing, then retry.",
-        });
-      }
       setStatus({ kind: "signing" });
-      const { signature } = await withTimeout(
-        provider.signMessage(toBytes(nonceData.message), "utf8"),
-        15000,
-        "wallet.signMessage"
-      );
+      const { signature } = await phantom.signMessage!(toBytes(message), "utf8");
       const signatureBase58 = base58Encode(signature);
 
-      // 3) POST /auth/verify (sets auth cookie + returns token)
       setStatus({ kind: "verifying" });
-      const verify = await withTimeout(
-        verifySignature({ walletAddress: wallet, signatureBase58 }),
-        15000,
-        "POST /auth/verify"
-      );
-
-      // Optional: token is also stored in localStorage by your api.ts verify handler (if you choose)
-      setStatus({ kind: "success", userId: verify.userId, token: verify.token });
+      const verifyRes = await fetch(`${API_BASE}/auth/verify`, {
+        method: "POST",
+        credentials: "omit",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ walletAddress: wallet, signatureBase58, nonce: n }),
+      });
+      if (!verifyRes.ok) {
+        const body = await safeJson(verifyRes);
+        const msg = body?.error || `Verify failed: HTTP ${verifyRes.status}`;
+        let hint = "";
+        if (verifyRes.status === 400 && /nonce/i.test(msg)) {
+          hint = "Frontend must include the nonce returned by /auth/nonce in the verify body.";
+        }
+        throw withHint(msg, hint);
+      }
+      const ok = (await verifyRes.json()) as { ok: boolean; userId: string; token?: string };
+      if (ok?.token) {
+        try { window.localStorage?.setItem("authToken", ok.token); } catch {}
+      }
+      setStatus({ kind: "success", userId: ok.userId });
+      window.location.href = "/homehub";
     } catch (e: any) {
-      const msg = typeof e?.message === "string" ? e.message : "Something went wrong";
-      const hint = e?.hint;
-      setStatus({ kind: "error", message: msg, hint });
+      setStatus({ kind: "error", message: e?.message || "Something went wrong", hint: e?.hint });
     }
-  }, [address, connectWallet, provider]);
+  }, [address, connectWallet, fetchNonce, phantom]);
 
-  const disconnect = useCallback(async () => {
-    try {
-      await provider?.disconnect?.();
-    } catch {}
-    setAddress("");
-    setStatus({ kind: "idle" });
-  }, [provider]);
+  const disconnect = React.useCallback(async () => {
+    try { await phantom?.disconnect?.(); } catch {}
+    setAddress(""); setNonce(null); setStatus({ kind: "idle" });
+  }, [phantom]);
 
   const disabled =
-    status.kind === "connecting" ||
-    status.kind === "gettingNonce" ||
-    status.kind === "signing" ||
-    status.kind === "verifying";
+    status.kind === "connecting" || status.kind === "gettingNonce" ||
+    status.kind === "signing" || status.kind === "verifying";
 
-  const showInstall =
-    !provider ||
-    (!provider.isPhantom && !provider.connect);
+  const isProd = !!import.meta.env?.PROD;
 
   return (
-    <div style={card}>
-      <h2 style={{ marginTop: 0 }}>Sign in with Solana</h2>
+    <div style={pageWrap}>
+      <div style={card}>
+        <h1 style={title}>Sign in with Solana</h1>
+        <p style={subtitle}>Secure sign in using your Phantom wallet.</p>
 
-      {address ? (
-        <p style={muted}>
-          Connected: <span style={mono}>{address}</span>
-        </p>
-      ) : (
-        <p style={muted}>No wallet connected.</p>
-      )}
-
-      <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-        {showInstall ? (
-          <>
-            <a href="https://phantom.app/" target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>
-              <button style={btnPrimary}>Install Phantom</button>
-            </a>
-            <button
-              style={btnSecondary}
-              onClick={() => window.location.reload()}
-              title="Reload after installing Phantom"
-            >
-              Reload
-            </button>
-          </>
-        ) : !address ? (
+        {!address ? (
           <button onClick={connectWallet} disabled={disabled} style={btnPrimary}>
             {status.kind === "connecting" ? "Connecting…" : "Connect Phantom"}
           </button>
         ) : (
           <>
-            <button onClick={disconnect} disabled={disabled} style={btnSecondary}>
-              Disconnect
-            </button>
-            <button onClick={signIn} disabled={disabled} style={btnPrimary}>
-              {status.kind === "gettingNonce"
-                ? "Getting nonce…"
-                : status.kind === "signing"
-                ? "Signing…"
-                : status.kind === "verifying"
-                ? "Verifying…"
-                : "Sign In"}
-            </button>
+            <div style={pill}>
+              <div style={{ fontSize: 12, opacity: 0.8 }}>Wallet</div>
+              <div style={mono}>{address}</div>
+            </div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button onClick={disconnect} disabled={disabled} style={btnMuted}>Disconnect</button>
+              <button onClick={signIn} disabled={disabled} style={btnPrimary}>
+                {status.kind === "gettingNonce" ? "Getting nonce…" :
+                 status.kind === "signing" ? "Signing…" :
+                 status.kind === "verifying" ? "Verifying…" : "Sign In"}
+              </button>
+            </div>
           </>
         )}
-      </div>
 
-      <div style={{ marginTop: 16 }}>
-        {status.kind === "error" && (
-          <div style={errorBox}>
-            <strong>Auth Error:</strong> {status.message}
-            {status.hint && <div style={{ marginTop: 6, opacity: 0.85 }}>{status.hint}</div>}
-            {/* CORS & cookies hint */}
-            <div style={{ marginTop: 6, opacity: 0.8 }}>
-              If this happens at “Getting nonce…” or “Verifying…”, check your API CORS & cookies (see checklist below).
+        <div style={{ minHeight: 20, marginTop: 12 }}>
+          {status.kind === "error" && (
+            <div style={errBox}>
+              <div><strong>Auth error:</strong> {status.message}</div>
+              {status.hint && <div style={{ opacity: 0.9, marginTop: 6 }}>{status.hint}</div>}
             </div>
-          </div>
-        )}
-        {status.kind === "success" && (
-          <div style={okBox}>
-            <div>✅ Signed in!</div>
-            <div>User ID: {status.userId}</div>
-            {status.token && (
-              <div style={{ marginTop: 6 }}>
-                JWT: <code style={mono}>{status.token}</code>
-              </div>
-            )}
-          </div>
-        )}
-        {(status.kind === "connecting" ||
-          status.kind === "gettingNonce" ||
-          status.kind === "signing" ||
-          status.kind === "verifying") && <div>Working…</div>}
-      </div>
+          )}
+          {status.kind === "success" && <div style={okBox}>✅ Signed in!</div>}
+        </div>
 
-      {/* Dev-only debug (hidden in prod) */}
-      {!isProd && (
-        <p style={{ marginTop: 16, fontSize: 12, opacity: 0.8 }}>
-          Dev: API = <code style={mono}>{API_BASE || "(missing VITE_API_BASE)"}</code>. If signing fails, enable{" "}
-          <em>Message Signing</em> in Phantom (Settings → Developer).
-        </p>
-      )}
+        <div style={note}>
+          Tip: If you don’t see the wallet popup, click the Phantom icon in your browser toolbar.
+        </div>
+
+        {!isProd && (
+          <div style={devBox}>
+            Dev info: API_BASE = <code>{API_BASE || "(missing VITE_API_BASE)"}</code>{" "}
+            {nonce ? <>• nonce=<code>{nonce}</code></> : null}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
-/** styles */
+const pageWrap: React.CSSProperties = {
+  minHeight: "100dvh", display: "grid", placeItems: "center", padding: 16,
+  background: "radial-gradient(1200px 700px at 10% -10%, #20104b 0%, #0b0b13 60%)",
+};
 const card: React.CSSProperties = {
-  maxWidth: 520,
-  margin: "24px auto",
-  padding: 16,
-  border: "1px solid rgba(0,0,0,0.1)",
-  borderRadius: 12,
+  width: "100%", maxWidth: 520, background: "rgba(255,255,255,0.04)",
+  border: "1px solid rgba(255,255,255,0.12)", borderRadius: 16, padding: 24,
+  boxShadow: "0 20px 60px rgba(0,0,0,.35)", color: "#e7e9ee",
 };
+const title: React.CSSProperties = { margin: 0, fontSize: 24, fontWeight: 700 };
+const subtitle: React.CSSProperties = { margin: "6px 0 18px", opacity: 0.85 };
 const btnPrimary: React.CSSProperties = {
-  padding: "10px 14px",
-  borderRadius: 8,
-  border: "1px solid #111",
-  background: "#111",
-  color: "#fff",
-  cursor: "pointer",
+  padding: "12px 16px", borderRadius: 10, border: "1px solid #6b46c1",
+  background: "linear-gradient(180deg,#7c3aed,#5b21b6)", color: "#fff",
+  cursor: "pointer", fontWeight: 600, boxShadow: "0 10px 30px rgba(124,58,237,.35)",
 };
-const btnSecondary: React.CSSProperties = {
-  padding: "10px 14px",
-  borderRadius: 8,
-  border: "1px solid #999",
-  background: "#fff",
-  color: "#111",
-  cursor: "pointer",
+const btnMuted: React.CSSProperties = {
+  padding: "12px 16px", borderRadius: 10, border: "1px solid rgba(255,255,255,.25)",
+  background: "transparent", color: "#e7e9ee", cursor: "pointer",
 };
-const mono: React.CSSProperties = { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", wordBreak: "break-all" };
-const muted: React.CSSProperties = { margin: "8px 0", color: "#6b7280" };
-const errorBox: React.CSSProperties = {
-  background: "rgba(255,0,0,0.08)",
-  border: "1px solid rgba(255,0,0,0.3)",
-  color: "#700",
-  padding: 10,
-  borderRadius: 8,
-};
-const okBox: React.CSSProperties = {
-  background: "rgba(0,180,0,0.08)",
-  border: "1px solid rgba(0,180,0,0.35)",
-  color: "#064",
-  padding: 10,
-  borderRadius: 8,
-};
+const pill: React.CSSProperties = { margin: "10px 0 14px", padding: "10px 12px", borderRadius: 12, border: "1px dashed rgba(255,255,255,.25)" };
+const mono: React.CSSProperties = { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" };
+const errBox: React.CSSProperties = { background: "rgba(255,0,0,0.08)", border: "1px solid rgba(255,0,0,0.3)", color: "#ffd5d5", padding: 10, borderRadius: 10 };
+const okBox: React.CSSProperties = { background: "rgba(0,180,0,0.08)", border: "1px solid rgba(0,180,0,0.35)", color: "#9effc6", padding: 10, borderRadius: 10 };
+const note: React.CSSProperties = { marginTop: 10, fontSize: 12, opacity: 0.8 };
+const devBox: React.CSSProperties = { marginTop: 14, padding: "8px 10px", borderRadius: 10, border: "1px dashed rgba(255,255,255,.2)", opacity: 0.85 };
+
+// === End: Sign-in component ===
+
+export default function ConnectWalletPage() {
+  return <SignInWithWallet />;
+}
