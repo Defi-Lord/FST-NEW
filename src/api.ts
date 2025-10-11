@@ -146,11 +146,40 @@ export async function verifySignature(payload: { walletAddress: string; signatur
   }>(`/auth/verify`, payload);
 }
 
+/** Get current user (JWT protected). Tries /user/me then falls back to /auth/me. */
+export async function getMe(): Promise<{ id: string; wallet?: string; email?: string; [k: string]: any }> {
+  try {
+    return await authGet(`/user/me`);
+  } catch {
+    return authGet(`/auth/me`);
+  }
+}
+
+/** Sign out (clears cookie server-side; also clears localStorage token here). */
+export async function signOut(): Promise<{ ok: boolean }> {
+  let resp: { ok: boolean } | null = null;
+  try {
+    resp = await authPost<{ ok: boolean }>(`/auth/logout`, {});
+  } catch {
+    try {
+      resp = await authPost<{ ok: boolean }>(`/auth/signout`, {});
+    } catch {
+      // swallow; we'll still clear local token below
+      resp = { ok: true };
+    }
+  }
+  try {
+    if (typeof window !== "undefined") window.localStorage.removeItem("authToken");
+  } catch {}
+  return resp ?? { ok: true };
+}
+
 // ---------- Public (FPL-style) data ----------
 export async function fetchFixtures(): Promise<any> {
   try {
     return await apiGet<any>("/public/fixtures");
   } catch {
+    // Fallback to local mock under /public/mock
     const r = await fetch("/mock/fixtures.json");
     if (!r.ok) throw new Error(`fixtures mock not found (${r.status})`);
     return r.json();
@@ -280,11 +309,9 @@ export type HistoryItem = {
 
 /** Returns the authenticated user's contest history */
 export async function getMyHistory(): Promise<HistoryItem[]> {
-  // Primary: protected endpoint
   try {
     return await authGet<HistoryItem[]>("/user/history");
-  } catch (e) {
-    // Optional fallback if you expose a public history view
+  } catch {
     return apiGet<HistoryItem[]>("/public/user/history");
   }
 }
