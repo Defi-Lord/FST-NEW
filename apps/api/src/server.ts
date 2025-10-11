@@ -12,11 +12,10 @@ import { TextEncoder } from 'util';
 /* ---------------- ENV ---------------- */
 const PORT = Number(process.env.PORT || 4000);
 
-// Example:
-// CORS_ORIGIN="https://fst-mini-app.vercel.app,https://*.vercel.app"
+// Allow multiple origins, supports wildcard: "https://fst-mini-app.vercel.app,https://*.vercel.app"
 const RAW_ORIGINS = (process.env.CORS_ORIGIN || '').trim();
 
-// Use a LONG random string (≥64 chars) in production!
+// Use a LONG random string (≥64 chars) in production
 const JWT_SECRET = process.env.JWT_SECRET || 'PLEASE_SET_A_LONG_RANDOM_SECRET';
 
 /* ------------- ORIGIN MATCH ------------- */
@@ -44,7 +43,7 @@ app.set('trust proxy', 1);
 app.use(express.json());
 app.use(cookieParser());
 
-/* --------- CORS (minimal, bulletproof) --------- */
+/* --------- CORS (minimal, robust) --------- */
 const corsMiddleware = (req, res, next) => {
   const origin = req.headers?.origin;
   if (origin && originAllowed(origin)) {
@@ -75,7 +74,6 @@ function tokenFromAuth(req) {
 
 /* -------------- ROUTES -------------- */
 
-// Health
 app.get('/public/healthz', (_req, res) => {
   res.json({
     ok: true,
@@ -91,17 +89,14 @@ app.get('/public/healthz', (_req, res) => {
   });
 });
 
-/**
- * GET /auth/nonce?wallet=<base58>
- * Best-effort sets HttpOnly 'nonce' cookie AND returns { nonce, message } in JSON.
- * Frontend does NOT rely on cookie; it includes `nonce` in POST /auth/verify body.
- */
+/** GET /auth/nonce?wallet=<base58> */
 app.get('/auth/nonce', (req, res) => {
   const wallet = String(req.query.wallet || '').trim();
   if (!wallet) return res.status(400).json({ error: 'Missing wallet' });
 
   const nonce = crypto.randomUUID();
 
+  // Best-effort cookie; frontend ALSO gets nonce in JSON and will post it back
   res.cookie('nonce', nonce, {
     httpOnly: true,
     secure: true,
@@ -114,64 +109,65 @@ app.get('/auth/nonce', (req, res) => {
   res.json({ wallet, nonce, message, expiresInSec: 300 });
 });
 
-/**
- * POST /auth/verify
+/** POST /auth/verify
  * Body: { walletAddress, signatureBase58, nonce? }
- * Accepts nonce from cookie OR body (works even if cookie is blocked).
+ * Accepts nonce from cookie OR body; returns 4xx with clear messages (never 500).
  */
 app.post('/auth/verify', (req, res) => {
-  const { walletAddress, signatureBase58, nonce: nonceFromBody } = (req.body || {}) as {
-    walletAddress?: string;
-    signatureBase58?: string;
-    nonce?: string;
-  };
-
-  if (!walletAddress || !signatureBase58) {
-    return res.status(400).json({ error: 'Missing walletAddress or signatureBase58' });
-  }
-
-  const nonceCookie = req.cookies?.nonce as string | undefined;
-  const nonce = nonceCookie || (typeof nonceFromBody === 'string' ? nonceFromBody : '');
-
-  if (!nonce) {
-    // never say "Missing nonce cookie" — we accept cookie OR body
-    return res.status(400).json({ error: 'Missing nonce (cookie or body)' });
-  }
-
-  const message = `Sign in to FST as ${walletAddress}\nNonce: ${nonce}`;
-
-  let pubkey: Uint8Array, sig: Uint8Array;
   try {
-    pubkey = bs58.decode(walletAddress);
-    sig = bs58.decode(signatureBase58);
-  } catch {
-    return res.status(400).json({ error: 'Invalid base58 in walletAddress or signatureBase58' });
+    const { walletAddress, signatureBase58, nonce: nonceFromBody } = (req.body || {}) as {
+      walletAddress?: string;
+      signatureBase58?: string;
+      nonce?: string;
+    };
+
+    if (!walletAddress || !signatureBase58) {
+      return res.status(400).json({ error: 'Missing walletAddress or signatureBase58' });
+    }
+
+    const nonceCookie = req.cookies?.nonce;
+    const nonce = nonceCookie || (typeof nonceFromBody === 'string' ? nonceFromBody : '');
+
+    if (!nonce) {
+      return res.status(400).json({ error: 'Missing nonce (cookie or body)' });
+    }
+
+    const message = `Sign in to FST as ${walletAddress}\nNonce: ${nonce}`;
+
+    let pubkey: Uint8Array, sig: Uint8Array;
+    try {
+      pubkey = bs58.decode(walletAddress);
+      sig = bs58.decode(signatureBase58);
+    } catch (e) {
+      return res.status(400).json({ error: 'Invalid base58 in walletAddress or signatureBase58' });
+    }
+
+    const ok = nacl.sign.detached.verify(utf8(message), sig, pubkey);
+    if (!ok) return res.status(401).json({ error: 'Invalid signature' });
+
+    if (nonceCookie) {
+      res.clearCookie('nonce', { path: '/', sameSite: 'none', secure: true });
+    }
+
+    const token = signJwt(walletAddress);
+
+    // Optional cookie; SPA may also store token in localStorage
+    res.cookie('auth', token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'none',
+      path: '/',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    res.json({ ok: true, userId: walletAddress, token });
+  } catch (err) {
+    console.error('verify-error:', err);
+    res.status(400).json({ error: 'Bad request' }); // keep it 4xx; no more 500s
   }
-
-  const ok = nacl.sign.detached.verify(utf8(message), sig, pubkey);
-  if (!ok) return res.status(401).json({ error: 'Invalid signature' });
-
-  if (nonceCookie) {
-    res.clearCookie('nonce', { path: '/', sameSite: 'none', secure: true });
-  }
-
-  const token = signJwt(walletAddress);
-
-  // Optional cookie; SPA also stores token in localStorage
-  res.cookie('auth', token, {
-    httpOnly: true,
-    secure: true,
-    sameSite: 'none',
-    path: '/',
-    maxAge: 7 * 24 * 60 * 60 * 1000,
-  });
-
-  res.json({ ok: true, userId: walletAddress, token });
 });
 
-/**
- * GET /me  (Authorization: Bearer <token>)
- */
+/** GET /me  (Authorization: Bearer <token>) */
 app.get('/me', (req, res) => {
   const token = tokenFromAuth(req);
   if (!token) return res.status(401).json({ error: 'Missing Authorization: Bearer <token>' });
