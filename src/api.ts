@@ -151,7 +151,6 @@ export async function fetchFixtures(): Promise<any> {
   try {
     return await apiGet<any>("/public/fixtures");
   } catch {
-    // Fallback to local mock under /public/mock
     const r = await fetch("/mock/fixtures.json");
     if (!r.ok) throw new Error(`fixtures mock not found (${r.status})`);
     return r.json();
@@ -208,7 +207,7 @@ export async function verifyPaidJoin(contestId: string, reference: string) {
   );
 }
 
-// ---------- Admin endpoints (JWT required) ----------
+// ---------- Admin (JWT required) ----------
 export type NewContestInput = {
   name: string;
   entryFee?: number;
@@ -229,7 +228,6 @@ export type User = {
 };
 
 export async function adminHealth(): Promise<{ ok: boolean; [k: string]: any }> {
-  // Prefer admin health; if not present on server, fallback to public health
   try {
     return await authGet<{ ok: boolean }>("/admin/healthz");
   } catch {
@@ -249,10 +247,7 @@ export async function deleteContest(id: string) {
   return authDelete<{ ok: true }>(`/admin/contests/${encodeURIComponent(id)}`);
 }
 
-/**
- * Toggle contest active/visibility/status.
- * If your backend expects a boolean "enabled", pass it; otherwise the endpoint can just flip server-side.
- */
+/** Toggle contest active/visibility/status */
 export async function toggleContest(id: string, enabled?: boolean) {
   return authPost<Contest>(`/admin/contests/${encodeURIComponent(id)}/toggle`, enabled === undefined ? {} : { enabled });
 }
@@ -262,13 +257,34 @@ export async function listUsers(): Promise<User[]> {
   return authGet<User[]>("/admin/users");
 }
 
-/** Contest leaderboard.
- * Try admin endpoint first, then fall back to a public leaderboard if available.
- */
+/** Contest leaderboard (admin preferred, public fallback) */
 export async function getContestLeaderboard(contestId: string): Promise<any> {
   try {
     return await authGet<any>(`/admin/contests/${encodeURIComponent(contestId)}/leaderboard`);
   } catch {
     return apiGet<any>(`/public/contests/${encodeURIComponent(contestId)}/leaderboard`);
+  }
+}
+
+// ---------- User (JWT required) ----------
+export type HistoryItem = {
+  id?: string;
+  contestId: string;
+  entryId?: string;
+  position?: number;
+  points?: number;
+  prize?: number;
+  createdAt?: string; // ISO
+  [k: string]: any;
+};
+
+/** Returns the authenticated user's contest history */
+export async function getMyHistory(): Promise<HistoryItem[]> {
+  // Primary: protected endpoint
+  try {
+    return await authGet<HistoryItem[]>("/user/history");
+  } catch (e) {
+    // Optional fallback if you expose a public history view
+    return apiGet<HistoryItem[]>("/public/user/history");
   }
 }
