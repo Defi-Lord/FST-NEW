@@ -1,14 +1,16 @@
-import express from 'express';
+// apps/api/src/server.ts
+import express, { type Request, type Response, type NextFunction, type RequestHandler } from 'express';
 import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import nacl from 'tweetnacl';
 import bs58 from 'bs58';
+import { TextEncoder } from 'util';
 
 /* ---------------- ENV ---------------- */
 const PORT = Number(process.env.PORT || 4000);
 
-// Comma-separated list. Examples:
+// Comma-separated list (supports wildcards):
 //   CORS_ORIGIN = https://fst-mini-app.vercel.app,https://*.vercel.app
 const RAW_ORIGINS = (process.env.CORS_ORIGIN || '').trim();
 
@@ -18,7 +20,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'PLEASE_SET_A_LONG_RANDOM_SECRET';
 /* ------------- ORIGIN MATCH ------------- */
 const ALLOWED = RAW_ORIGINS
   .split(',')
-  .map(s => s.trim().replace(/\/+$/, ''))
+  .map((s) => s.trim().replace(/\/+$/, ''))
   .filter(Boolean);
 
 function originAllowed(origin?: string) {
@@ -36,36 +38,34 @@ function originAllowed(origin?: string) {
 
 /* ---------------- APP ---------------- */
 const app = express();
-
-// Required so Secure cookies work behind Render/proxies
 app.set('trust proxy', 1);
-
 app.use(express.json());
 app.use(cookieParser());
 
-// Dynamic CORS that reflects only allowed origins
-app.use((req, res, next) => {
+// CORS middleware (typed explicitly to avoid TS overload confusion)
+const corsHandler: RequestHandler = (req: Request, res: Response, next: NextFunction) => {
   const origin = req.headers.origin as string | undefined;
   if (origin && originAllowed(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-    res.header('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
   }
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return;
+  }
   next();
-});
+};
+app.use(corsHandler);
 
 /* -------------- HELPERS -------------- */
 const te = new TextEncoder();
 const utf8 = (s: string) => te.encode(s);
+const signJwt = (sub: string) => jwt.sign({ sub, app: 'FST' }, JWT_SECRET, { expiresIn: '7d' });
 
-function signJwt(sub: string) {
-  return jwt.sign({ sub, app: 'FST' }, JWT_SECRET, { expiresIn: '7d' });
-}
-
-function tokenFromAuth(req: express.Request) {
+function tokenFromAuth(req: Request) {
   const h = req.headers.authorization || '';
   const m = /^Bearer\s+(.+)$/.exec(h);
   return m ? m[1] : null;
@@ -83,9 +83,9 @@ app.get('/public/healthz', (_req, res) => {
       health: '/public/healthz',
       nonce: '/auth/nonce?wallet=<BASE58_WALLET>',
       verify: 'POST /auth/verify { walletAddress, signatureBase58, nonce? }',
-      me: 'GET /me (Authorization: Bearer <token>)'
+      me: 'GET /me (Authorization: Bearer <token>)',
     },
-    allowedOrigins: ALLOWED
+    allowedOrigins: ALLOWED,
   });
 });
 
@@ -99,25 +99,23 @@ app.get('/auth/nonce', (req, res) => {
 
   const nonce = crypto.randomUUID();
 
-  // Cross-site cookie (best practice). Some browsers may block — JSON fallback handles it.
+  // Best-effort cookie (some browsers block it; we also return nonce in body)
   res.cookie('nonce', nonce, {
     httpOnly: true,
     secure: true,
     sameSite: 'none',
     path: '/',
-    maxAge: 5 * 60 * 1000, // 5 minutes
+    maxAge: 5 * 60 * 1000,
   });
 
-  // Deterministic message; must match verification message exactly
   const message = `Sign in to FST as ${wallet}\nNonce: ${nonce}`;
-
   res.json({ wallet, nonce, message, expiresInSec: 300 });
 });
 
 /**
  * POST /auth/verify
  * Body: { walletAddress, signatureBase58, nonce? }
- * Validates signature for the exact message. Accepts nonce from cookie OR body.
+ * Accepts nonce from cookie OR body.
  */
 app.post('/auth/verify', (req, res) => {
   const { walletAddress, signatureBase58, nonce: nonceFromBody } = req.body || {};
@@ -126,19 +124,16 @@ app.post('/auth/verify', (req, res) => {
     return res.status(400).json({ error: 'Missing walletAddress or signatureBase58' });
   }
 
-  // Accept nonce via cookie OR body (fallback for blocked third-party cookies)
   const nonceCookie = req.cookies?.nonce;
-  const nonce =
-    nonceCookie || (typeof nonceFromBody === 'string' ? nonceFromBody : '');
+  const nonce = nonceCookie || (typeof nonceFromBody === 'string' ? nonceFromBody : '');
 
   if (!nonce) {
+    // Do NOT return "Missing nonce cookie" anymore:
     return res.status(400).json({ error: 'Missing nonce (cookie or body)' });
   }
 
-  // Recreate the EXACT message the user signed
   const message = `Sign in to FST as ${walletAddress}\nNonce: ${nonce}`;
 
-  // Decode pubkey + signature (base58)
   let pubkey: Uint8Array, sig: Uint8Array;
   try {
     pubkey = bs58.decode(walletAddress);
@@ -147,19 +142,16 @@ app.post('/auth/verify', (req, res) => {
     return res.status(400).json({ error: 'Invalid base58 in walletAddress or signatureBase58' });
   }
 
-  // Verify ed25519
   const ok = nacl.sign.detached.verify(utf8(message), sig, pubkey);
   if (!ok) return res.status(401).json({ error: 'Invalid signature' });
 
-  // Clear one-time nonce if it existed as a cookie
   if (nonceCookie) {
     res.clearCookie('nonce', { path: '/', sameSite: 'none', secure: true });
   }
 
-  // Issue JWT
   const token = signJwt(walletAddress);
 
-  // (Optional) Also set an auth cookie for same-site API usage (SPA uses localStorage too)
+  // Optional cookie; SPA also stores in localStorage
   res.cookie('auth', token, {
     httpOnly: true,
     secure: true,
@@ -173,7 +165,6 @@ app.post('/auth/verify', (req, res) => {
 
 /**
  * GET /me  (Authorization: Bearer <token>)
- * Returns the user subject from JWT.
  */
 app.get('/me', (req, res) => {
   const token = tokenFromAuth(req);
