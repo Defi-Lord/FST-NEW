@@ -37,7 +37,7 @@ function originAllowed(origin?: string | null) {
 }
 
 /* ---------------- APP ---------------- */
-const app = express();
+const app = express() as any; // cast to any to avoid TS overload errors on app.use
 app.set('trust proxy', 1);
 app.use(express.json());
 app.use(cookieParser());
@@ -49,7 +49,6 @@ const corsMiddleware = (req: any, res: any, next: any) => {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
   }
-  // We allow credentials; frontend currently uses credentials:'omit', so it's fine.
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -59,16 +58,15 @@ const corsMiddleware = (req: any, res: any, next: any) => {
   }
   next();
 };
-// Cast app on mount to avoid TS overload noise
-(app as any).use(corsMiddleware);
+app.use(corsMiddleware);
 
 /* -------------- HELPERS -------------- */
 const te = new TextEncoder();
 const utf8 = (s: string) => te.encode(s);
 const signJwt = (sub: string) => jwt.sign({ sub, app: 'FST' }, JWT_SECRET, { expiresIn: '7d' });
 
-function tokenFromAuth(req: express.Request) {
-  const h = req.headers.authorization || '';
+function tokenFromAuth(req: any) {
+  const h = req.headers?.authorization || '';
   const m = /^Bearer\s+(.+)$/.exec(h);
   return m ? m[1] : null;
 }
@@ -76,7 +74,7 @@ function tokenFromAuth(req: express.Request) {
 /* -------------- ROUTES -------------- */
 
 // Health
-app.get('/public/healthz', (_req, res) => {
+app.get('/public/healthz', (_req: any, res: any) => {
   res.json({
     ok: true,
     name: 'FST',
@@ -96,7 +94,7 @@ app.get('/public/healthz', (_req, res) => {
  * Best-effort sets HttpOnly 'nonce' cookie AND returns { nonce, message } in JSON.
  * Frontend does NOT rely on cookie; it includes `nonce` in POST /auth/verify body.
  */
-app.get('/auth/nonce', (req, res) => {
+app.get('/auth/nonce', (req: any, res: any) => {
   const wallet = String(req.query.wallet || '').trim();
   if (!wallet) return res.status(400).json({ error: 'Missing wallet' });
 
@@ -119,7 +117,7 @@ app.get('/auth/nonce', (req, res) => {
  * Body: { walletAddress, signatureBase58, nonce? }
  * Accepts nonce from cookie OR body (works even if cookie is blocked).
  */
-app.post('/auth/verify', (req, res) => {
+app.post('/auth/verify', (req: any, res: any) => {
   const { walletAddress, signatureBase58, nonce: nonceFromBody } = (req.body || {}) as {
     walletAddress?: string;
     signatureBase58?: string;
@@ -130,7 +128,7 @@ app.post('/auth/verify', (req, res) => {
     return res.status(400).json({ error: 'Missing walletAddress or signatureBase58' });
   }
 
-  const nonceCookie = (req as any).cookies?.nonce as string | undefined;
+  const nonceCookie = req.cookies?.nonce as string | undefined;
   const nonce = nonceCookie || (typeof nonceFromBody === 'string' ? nonceFromBody : '');
 
   if (!nonce) {
@@ -172,7 +170,7 @@ app.post('/auth/verify', (req, res) => {
 /**
  * GET /me  (Authorization: Bearer <token>)
  */
-app.get('/me', (req, res) => {
+app.get('/me', (req: any, res: any) => {
   const token = tokenFromAuth(req);
   if (!token) return res.status(401).json({ error: 'Missing Authorization: Bearer <token>' });
 
