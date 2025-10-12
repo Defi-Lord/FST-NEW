@@ -1,92 +1,198 @@
 // src/pages_Profile.tsx
-import React from 'react'
-import TopBar from './components_TopBar'
-import { useApp } from './state'
-import { getMe, signOut } from './api'
+import React from "react";
 
-export default function Profile({ onBack }: { onBack?: () => void }) {
-  const { walletAddress } = useApp()
-  const [userId, setUserId] = React.useState<string>(walletAddress || '')
-  const [tgUser, setTgUser] = React.useState<string>('—')
+const API_BASE =
+  (import.meta as any)?.env?.VITE_API_BASE?.replace(/\/+$/, "") || "";
+
+type Me = {
+  userId?: string;
+  walletId?: string;
+  walletAddress?: string;
+  createdAt?: string;
+  [k: string]: any;
+};
+
+export default function ProfilePage({ onBack }: { onBack?: () => void }) {
+  const [me, setMe] = React.useState<Me | null>(null);
+  const [err, setErr] = React.useState<string | null>(null);
+  const [loading, setLoading] = React.useState(true);
 
   React.useEffect(() => {
     (async () => {
       try {
-        const me = await getMe()
-        setUserId(me.user?.id || walletAddress || '')
-      } catch {}
-      try {
-        const tg = (window as any)?.Telegram?.WebApp
-        const u = tg?.initDataUnsafe?.user
-        if (u?.username) setTgUser(`@${u.username}`)
-        else if (u?.first_name) setTgUser(`${u.first_name}${u?.last_name ? ' ' + u.last_name : ''}`)
-      } catch {}
-    })()
-  }, [walletAddress])
+        setLoading(true);
+        setErr(null);
+        const token =
+          typeof window !== "undefined"
+            ? localStorage.getItem("auth_token")
+            : null;
+        const res = await fetch(`${API_BASE}/me`, {
+          credentials: "include",
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        const txt = await res.text();
+        if (!res.ok) throw new Error(txt || `HTTP ${res.status}`);
+        setMe(JSON.parse(txt));
+      } catch (e: any) {
+        setErr(e?.message || String(e));
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
 
-  const copy = (txt: string) => navigator.clipboard?.writeText(txt).then(() => alert('Copied!'))
-
-  const short = (a: string) => a ? `${a.slice(0, 6)}…${a.slice(-6)}` : '—'
-
-  const doSignOut = () => {
-    signOut()
-    alert('Signed out')
-    onBack?.()
-  }
+  const signOut = React.useCallback(() => {
+    try {
+      localStorage.removeItem("auth_token");
+    } catch {}
+    // If your API has /auth/signout that clears cookie, call it too (optional).
+    try {
+      window.location.assign("/");
+    } catch {}
+  }, []);
 
   return (
-    <div className="screen">
-      <style>{css}</style>
-      <TopBar title="Profile" onBack={onBack} />
-
-      <div className="container" style={{ paddingBottom: 120 }}>
-        <div className="card hero">
-          <div className="logo">FST</div>
-          <h2>Account</h2>
-          <p className="muted">Manage your connection details</p>
+    <Shell title="Profile" onBack={onBack}>
+      {loading && <p>Loading profile…</p>}
+      {err && (
+        <div style={errBox}>
+          <strong>Error:</strong> {err}
         </div>
-
-        <div className="card rowc">
-          <div className="kv">
-            <div className="k">Wallet</div>
-            <div className="v mono">{short(userId)}</div>
-          </div>
-          <button className="btn-ghost" onClick={() => copy(userId)} disabled={!userId}>Copy</button>
+      )}
+      {me && (
+        <div style={{ textAlign: "left", marginTop: 8 }}>
+          <Row label="User ID" value={me.userId || "—"} />
+          <Row label="Wallet ID" value={me.walletId || "—"} />
+          <Row label="Wallet Address" value={me.walletAddress || "—"} />
+          {me.createdAt && <Row label="Joined" value={new Date(me.createdAt).toLocaleString()} />}
         </div>
+      )}
 
-        <div className="card rowc">
-          <div className="kv">
-            <div className="k">Telegram</div>
-            <div className="v">{tgUser}</div>
-          </div>
-        </div>
-
-        <div className="card rowc">
-          <div className="kv">
-            <div className="k">Network</div>
-            <div className="v">Solana (Mainnet)</div>
-          </div>
-        </div>
-
-        <div className="row" style={{marginTop: 18}}>
-          <button className="btn danger" onClick={doSignOut}>Sign out</button>
-        </div>
+      <div style={{ marginTop: 16, display: "flex", gap: 8 }}>
+        <button style={btnMuted} onClick={() => (window.location.href = "/home")}>
+          Home
+        </button>
+        <button style={btnPrimary} onClick={signOut}>Sign Out</button>
       </div>
-    </div>
-  )
+    </Shell>
+  );
 }
 
-const css = String.raw`
-.container { padding: 12px 14px; color:#fff; }
-.card { background: rgba(255,255,255,0.04); border-radius: 16px; padding: 14px; border: 1px solid rgba(255,255,255,0.12); margin: 8px 0; }
-.rowc { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-.hero { text-align:center; background: linear-gradient(135deg, rgba(99,102,241,.18), rgba(236,72,153,.18)); }
-.logo { width:56px; height:56px; border-radius:14px; margin: 0 auto 6px; display:grid; place-items:center; background: linear-gradient(135deg, #6366f1, #ec4899); color:#fff; font-weight:900; }
-.kv .k { opacity:.8; }
-.kv .v { font-weight:900; }
-.muted { opacity:.75; margin:0; }
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-.btn { appearance:none; border:none; background:#111827; color:#fff; padding:10px 12px; border-radius:12px; font-weight:900; cursor:pointer; }
-.btn-ghost { appearance:none; background:transparent; color:#fff; padding:8px 10px; border-radius:10px; font-weight:800; border:1px solid rgba(255,255,255,.15); cursor:pointer; }
-.btn.danger { background:#dc2626; }
-`;
+/** UI bits reused across pages */
+function Shell({
+  title,
+  children,
+  onBack,
+}: {
+  title: string;
+  children: React.ReactNode;
+  onBack?: () => void;
+}) {
+  return (
+    <div style={wrap}>
+      <div style={card}>
+        <div style={logo}>FST</div>
+        <h1 style={{ margin: "6px 0 6px" }}>{title}</h1>
+        {onBack && (
+          <button style={btnMuted} onClick={onBack}>
+            ← Back
+          </button>
+        )}
+        <div style={{ marginTop: 12 }}>{children}</div>
+      </div>
+      <div style={bg} />
+    </div>
+  );
+}
+
+function Row({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div style={row}>
+      <div style={rowLabel}>{label}</div>
+      <div style={rowVal}>{value}</div>
+    </div>
+  );
+}
+
+/** styles */
+const wrap: React.CSSProperties = {
+  minHeight: "100dvh",
+  display: "grid",
+  placeItems: "center",
+  position: "relative",
+  overflow: "hidden",
+  background: "#0b1020",
+};
+const bg: React.CSSProperties = {
+  position: "absolute",
+  inset: "-20%",
+  background:
+    "radial-gradient(60% 40% at 20% 10%, rgba(124,58,237,.25), transparent 60%)," +
+    "radial-gradient(50% 40% at 80% 20%, rgba(236,72,153,.25), transparent 60%)," +
+    "radial-gradient(40% 30% at 40% 80%, rgba(16,185,129,.25), transparent 60%)",
+  filter: "blur(80px)",
+};
+const card: React.CSSProperties = {
+  position: "relative",
+  zIndex: 1,
+  width: "min(92vw, 560px)",
+  color: "#e7e9ee",
+  background: "rgba(255,255,255,.06)",
+  border: "1px solid rgba(255,255,255,.14)",
+  borderRadius: 16,
+  padding: 24,
+  boxShadow: "0 10px 50px rgba(0,0,0,.35)",
+  textAlign: "center",
+  backdropFilter: "blur(8px)",
+};
+const logo: React.CSSProperties = {
+  width: 56,
+  height: 56,
+  borderRadius: 14,
+  margin: "0 auto 12px",
+  display: "grid",
+  placeItems: "center",
+  background: "linear-gradient(135deg, #7c3aed, #ec4899)",
+  color: "#fff",
+  fontWeight: 900,
+  letterSpacing: ".5px",
+};
+const row: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "140px 1fr",
+  gap: 8,
+  padding: "10px 12px",
+  border: "1px solid rgba(255,255,255,.14)",
+  borderRadius: 12,
+  marginTop: 8,
+};
+const rowLabel: React.CSSProperties = { opacity: 0.75 };
+const rowVal: React.CSSProperties = { wordBreak: "break-all", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12 };
+const errBox: React.CSSProperties = {
+  border: "1px solid rgba(255,0,0,.35)",
+  background: "rgba(255,0,0,.08)",
+  color: "#ffd5d5",
+  borderRadius: 10,
+  padding: 10,
+  marginTop: 12,
+  textAlign: "left",
+};
+const btnMuted: React.CSSProperties = {
+  padding: "10px 14px",
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,.25)",
+  background: "transparent",
+  color: "#e7e9ee",
+  cursor: "pointer",
+  fontWeight: 700,
+};
+const btnPrimary: React.CSSProperties = {
+  padding: "10px 14px",
+  borderRadius: 12,
+  border: "1px solid #6b46c1",
+  background: "linear-gradient(180deg,#7c3aed,#5b21b6)",
+  color: "#fff",
+  cursor: "pointer",
+  fontWeight: 800,
+  boxShadow: "0 6px 20px rgba(124,58,237,.35)",
+};

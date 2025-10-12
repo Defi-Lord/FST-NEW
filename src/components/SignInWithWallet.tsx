@@ -1,16 +1,35 @@
+// src/components/SignInWithWallet.tsx
 import React, { useCallback, useMemo, useState } from "react";
 
-/** Resolve API base strictly from Vite env. */
-const API_BASE =
-  ((import.meta as any)?.env?.VITE_API_BASE as string | undefined)?.replace(/\/+$/, "") ?? "";
+/**
+ * API base:
+ * - In production, set VITE_API_BASE to your Render API URL (e.g. https://fst-api.onrender.com).
+ * - In dev (vite), defaults to http://localhost:4000 if not set.
+ */
+function computeApiBase() {
+  const envBase = (import.meta as any)?.env?.VITE_API_BASE as string | undefined;
+  const isProd = !!import.meta.env?.PROD;
 
-/** Helpers */
+  let base: string | undefined = envBase;
+
+  if (!base || base.trim().length === 0) {
+    base = isProd ? "" : "http://localhost:4000";
+    if (isProd && typeof window !== "undefined") {
+      // eslint-disable-next-line no-console
+      console.warn("VITE_API_BASE is not set in production.");
+    }
+  }
+  return base.replace(/\/+$/, "");
+}
+const API_BASE = computeApiBase();
+
+/** Minimal helpers */
 const toBytes = (s: string) => new TextEncoder().encode(s);
 
-/** Base58 encoder (bitcoin alphabet) */
+/** base58 encoder (bitcoin alphabet) — no external deps */
 function base58Encode(bytes: Uint8Array): string {
-  const A = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-  if (!bytes.length) return "";
+  const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  if (bytes.length === 0) return "";
   let zeros = 0;
   while (zeros < bytes.length && bytes[zeros] === 0) zeros++;
   const input = bytes.slice();
@@ -28,10 +47,10 @@ function base58Encode(bytes: Uint8Array): string {
     }
   }
   for (let k = 0; k < zeros; k++) digits.push(0);
-  return digits.reverse().map((d) => A[d]).join("");
+  return digits.reverse().map((d) => ALPHABET[d]).join("");
 }
 
-/** Phantom types (subset) */
+/** Phantom (subset) */
 type PhantomProvider = {
   isPhantom?: boolean;
   publicKey?: { toBase58?: () => string; toString?: () => string };
@@ -47,133 +66,118 @@ declare global {
   }
 }
 
+function detectPhantom(): PhantomProvider | undefined {
+  const w = typeof window !== "undefined" ? (window as any) : undefined;
+  if (!w) return undefined;
+  if (w?.solana?.isPhantom) return w.solana as PhantomProvider;
+  if (w?.phantom?.solana?.isPhantom) return w.phantom.solana as PhantomProvider;
+  return undefined;
+}
+
 type Status =
   | { kind: "idle" }
   | { kind: "connecting" }
   | { kind: "gettingNonce" }
   | { kind: "signing" }
   | { kind: "verifying" }
-  | { kind: "success"; userId: string }
+  | { kind: "success"; userId?: string; token?: string }
   | { kind: "error"; message: string; hint?: string };
 
-export default function SignInWithWallet() {
+export default function SignInWithWallet({ onSignedIn }: { onSignedIn?: () => void }) {
   const [status, setStatus] = useState<Status>({ kind: "idle" });
-  const [address, setAddress] = useState("");
-  const [nonce, setNonce] = useState<string | null>(null);
+  const [address, setAddress] = useState<string>("");
 
-  // Detect Phantom from any injected place
-  const phantom = useMemo<PhantomProvider | undefined>(() => {
-    const w = typeof window !== "undefined" ? (window as any) : undefined;
-    return w?.solana?.isPhantom
-      ? (w.solana as PhantomProvider)
-      : w?.phantom?.solana?.isPhantom
-      ? (w.phantom.solana as PhantomProvider)
-      : undefined;
-  }, []);
+  const phantom = useMemo(detectPhantom, []);
 
   const connectWallet = useCallback(async (): Promise<string> => {
-    if (!phantom?.connect) {
+    if (!phantom || !phantom.connect) {
       throw new Error("Phantom wallet not found. Install Phantom and refresh.");
     }
     setStatus({ kind: "connecting" });
     const res = await phantom.connect({ onlyIfTrusted: false });
-    const pk: any = res?.publicKey;
-    const pub =
-      (typeof pk?.toBase58 === "function" && pk.toBase58()) ||
-      (typeof pk?.toString === "function" && pk.toString()) ||
-      "";
-    if (!pub) throw new Error("Could not read wallet address from Phantom.");
+    const pkAny = res?.publicKey as any;
+    const pub = pkAny?.toBase58?.() ?? pkAny?.toString?.() ?? "";
+    if (!pub) throw new Error("Could not read wallet address.");
     setAddress(pub);
     return pub;
   }, [phantom]);
 
-  const fetchNonce = useCallback(
-    async (wallet: string): Promise<{ message: string; nonce: string }> => {
-      if (!API_BASE) {
-        throw new Error("Missing VITE_API_BASE. Set it to your Render API URL and redeploy.");
-      }
-      setStatus({ kind: "gettingNonce" });
-      const url = `${API_BASE}/auth/nonce?wallet=${encodeURIComponent(wallet)}`;
-      // We don’t need cookies; API returns { nonce, message } in body.
-      const r = await fetch(url, { method: "GET", credentials: "omit" });
-      if (!r.ok) {
-        let hint = "";
-        if (r.status === 400) hint = "Check the wallet address you’re sending.";
-        if (r.status === 403) hint = "Origin not allowed by API CORS_ORIGIN.";
-        const body = await safeJson(r);
-        throw withHint(body?.error || `Nonce request failed (${r.status})`, hint);
-      }
-      const data = (await r.json()) as { wallet: string; nonce: string; message: string };
-      if (!data?.nonce || !data?.message) {
-        throw new Error("Nonce response missing required fields.");
-      }
-      setNonce(data.nonce);
-      return { message: data.message, nonce: data.nonce };
-    },
-    []
-  );
-
   const signIn = useCallback(async () => {
     try {
+      if (!API_BASE) {
+        throw new Error("VITE_API_BASE is missing.");
+      }
       const wallet = address || (await connectWallet());
 
-      // 1) Get message + nonce
-      const { message, nonce: n } = await fetchNonce(wallet);
+      // 1) Get nonce MESSAGE (server also sets cookie; we’ll still pass message explicitly)
+      setStatus({ kind: "gettingNonce" });
+      const nonceUrl = `${API_BASE}/auth/nonce?wallet=${encodeURIComponent(wallet)}`;
+      const nonceRes = await fetch(nonceUrl, { method: "GET", credentials: "include" });
+      if (!nonceRes.ok) {
+        let hint: string | undefined;
+        if (nonceRes.status === 400 || nonceRes.status === 500) {
+          hint =
+            "If this is a preview domain, ensure Render CORS includes https://*.vercel.app and cookies use SameSite=None; Secure.";
+        }
+        throw { message: `Nonce request failed (${nonceRes.status})`, hint };
+      }
+      const nonceData = (await nonceRes.json()) as { message: string; expiresInSec?: number };
+      const message = nonceData?.message;
+      if (!message || typeof message !== "string") throw new Error("Nonce response missing message.");
 
       // 2) Sign exact message
       if (!phantom?.signMessage) {
-        throw withHint(
-          "Phantom `signMessage` not available.",
-          "Open Phantom → Settings → Developer → enable Message Signing."
-        );
+        throw {
+          message: "Phantom `signMessage` is not available.",
+          hint: "Enable ‘Message Signing’ in Phantom → Settings → Developer.",
+        };
       }
       setStatus({ kind: "signing" });
       const { signature } = await phantom.signMessage!(toBytes(message), "utf8");
       const signatureBase58 = base58Encode(signature);
 
-      // 3) Verify (send NONCE in body! — cookie-free)
+      // 3) Verify signature (body contains wallet + signature; server may read nonce from cookie or message)
       setStatus({ kind: "verifying" });
       const verifyRes = await fetch(`${API_BASE}/auth/verify`, {
         method: "POST",
-        credentials: "omit",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ walletAddress: wallet, signatureBase58, nonce: n }),
+        body: JSON.stringify({ walletAddress: wallet, signatureBase58, message }),
       });
-      if (!verifyRes.ok) {
-        const body = await safeJson(verifyRes);
-        let hint = "";
-        if (verifyRes.status === 400 && /nonce/i.test(body?.error || "")) {
-          hint = "Your frontend must include the nonce from /auth/nonce in the verify body.";
-        }
-        throw withHint(body?.error || `Verify failed (${verifyRes.status})`, hint);
-      }
-      const ok = (await verifyRes.json()) as { ok: boolean; userId: string; token?: string };
 
-      // Persist token (optional — some APIs also set a cookie)
-      if (ok?.token) {
+      if (!verifyRes.ok) {
+        const txt = await verifyRes.text().catch(() => "");
+        let hint: string | undefined;
+        if (verifyRes.status === 400) hint = "Missing/invalid nonce. Ensure the same domain is allowed in CORS and cookies aren’t blocked.";
+        if (verifyRes.status === 500) hint = "Server error. Check Render logs for /auth/verify.";
+        throw { message: `Verify failed (${verifyRes.status})${txt ? `: ${txt}` : ""}`, hint };
+      }
+
+      const data = (await verifyRes.json()) as {
+        ok: boolean;
+        token?: string;
+        userId?: string;
+      };
+      if (data?.token && typeof window !== "undefined") {
         try {
-          window.localStorage?.setItem("authToken", ok.token);
-          window.localStorage?.setItem("auth_token", ok.token);
+          window.localStorage.setItem("authToken", data.token);
         } catch {}
       }
+      setStatus({ kind: "success", userId: data.userId, token: data.token });
 
-      setStatus({ kind: "success", userId: ok.userId });
-
-      // Redirect to Home (adjust if your route is different)
-      window.location.href = "/home";
+      // let parent know so router can advance
+      onSignedIn?.();
     } catch (e: any) {
       const msg = e?.message || "Something went wrong";
-      const hint = (e && e.hint) || undefined;
-      setStatus({ kind: "error", message: msg, hint });
+      setStatus({ kind: "error", message: msg, hint: e?.hint });
     }
-  }, [address, connectWallet, fetchNonce, phantom]);
+  }, [address, connectWallet, phantom, onSignedIn]);
 
   const disconnect = useCallback(async () => {
     try {
       await phantom?.disconnect?.();
     } catch {}
     setAddress("");
-    setNonce(null);
     setStatus({ kind: "idle" });
   }, [phantom]);
 
@@ -186,26 +190,33 @@ export default function SignInWithWallet() {
   const isProd = !!import.meta.env?.PROD;
 
   return (
-    <div style={pageWrap}>
-      <div style={card}>
-        <h1 style={title}>Sign in with Solana</h1>
-        <p style={subtitle}>Secure sign in using your Phantom wallet.</p>
+    <div className="signin-wrap">
+      <style>{css}</style>
+      <div className="card">
+        <div className="logo">FST</div>
+        <h1>Sign in with Solana</h1>
+        <p className="sub">Secure sign in using your Phantom wallet.</p>
 
-        {!address ? (
-          <button onClick={connectWallet} disabled={disabled} style={btnPrimary}>
-            {status.kind === "connecting" ? "Connecting…" : "Connect Phantom"}
-          </button>
+        {address ? (
+          <div className="pill">
+            <div className="pill-label">Wallet</div>
+            <div className="pill-value">{address}</div>
+          </div>
         ) : (
-          <>
-            <div style={pill}>
-              <div style={{ fontSize: 12, opacity: 0.8 }}>Wallet</div>
-              <div style={mono}>{address}</div>
-            </div>
-            <div style={{ display: "flex", gap: 10 }}>
-              <button onClick={disconnect} disabled={disabled} style={btnMuted}>
+          <div className="pill muted">No wallet connected.</div>
+        )}
+
+        <div className="btn-row">
+          {!address ? (
+            <button className="btn-primary" onClick={connectWallet} disabled={disabled}>
+              {status.kind === "connecting" ? "Connecting…" : "Connect Phantom"}
+            </button>
+          ) : (
+            <>
+              <button className="btn-muted" onClick={disconnect} disabled={disabled}>
                 Disconnect
               </button>
-              <button onClick={signIn} disabled={disabled} style={btnPrimary}>
+              <button className="btn-primary" onClick={signIn} disabled={disabled}>
                 {status.kind === "gettingNonce"
                   ? "Getting nonce…"
                   : status.kind === "signing"
@@ -214,121 +225,75 @@ export default function SignInWithWallet() {
                   ? "Verifying…"
                   : "Sign In"}
               </button>
-            </div>
-          </>
-        )}
-
-        <div style={{ minHeight: 20, marginTop: 12 }}>
-          {status.kind === "error" && (
-            <div style={errBox}>
-              <div>
-                <strong>Auth error:</strong> {status.message}
-              </div>
-              {status.hint && <div style={{ opacity: 0.9, marginTop: 6 }}>{status.hint}</div>}
-            </div>
+            </>
           )}
-          {status.kind === "success" && <div style={okBox}>✅ Signed in! Redirecting…</div>}
         </div>
 
-        <div style={note}>
-          Tip: If you don’t see the wallet popup, click the Phantom icon in your browser toolbar.
+        <div className="state">
+          {status.kind === "error" && (
+            <div className="alert">
+              <div><strong>Auth error:</strong> {status.message}</div>
+              {status.hint && <div className="hint">{status.hint}</div>}
+              <div className="hint">
+                If it fails at “Getting nonce…” or “Verifying…”, ensure your API CORS allows your Vercel domain and sets cookies with <code>SameSite=None; Secure</code>.
+              </div>
+            </div>
+          )}
+
+          {status.kind === "success" && (
+            <div className="ok">
+              <div>✅ Signed in!</div>
+              {status.token && (
+                <div className="tiny">
+                  JWT stored locally (auth cookie may also be set).
+                </div>
+              )}
+            </div>
+          )}
+
+          {(status.kind === "connecting" ||
+            status.kind === "gettingNonce" ||
+            status.kind === "signing" ||
+            status.kind === "verifying") && <div className="ghost">Working…</div>}
         </div>
 
         {!isProd && (
-          <div style={devBox}>
-            Dev info: API_BASE = <code>{API_BASE || "(missing VITE_API_BASE)"}</code>{" "}
-            {nonce ? (
-              <>
-                • nonce=<code>{nonce}</code>
-              </>
-            ) : null}
+          <div className="tiny dev">
+            Dev: API = <code>{API_BASE || "(missing VITE_API_BASE)"}</code>
           </div>
         )}
+
+        <div className="tiny tip">
+          Tip: If you don’t see the wallet popup, click the Phantom icon in your browser toolbar.
+        </div>
       </div>
+      <div className="bg" />
     </div>
   );
 }
 
-/* ---------------- UI styles ---------------- */
-const pageWrap: React.CSSProperties = {
-  minHeight: "100dvh",
-  display: "grid",
-  placeItems: "center",
-  padding: 16,
-  background: "radial-gradient(1200px 700px at 10% -10%, #20104b 0%, #0b0b13 60%)",
-};
-const card: React.CSSProperties = {
-  width: "100%",
-  maxWidth: 520,
-  background: "rgba(255,255,255,0.04)",
-  border: "1px solid rgba(255,255,255,0.12)",
-  borderRadius: 16,
-  padding: 24,
-  boxShadow: "0 20px 60px rgba(0,0,0,.35)",
-  color: "#e7e9ee",
-};
-const title: React.CSSProperties = { margin: 0, fontSize: 24, fontWeight: 700 };
-const subtitle: React.CSSProperties = { margin: "6px 0 18px", opacity: 0.85 };
-const btnPrimary: React.CSSProperties = {
-  padding: "12px 16px",
-  borderRadius: 10,
-  border: "1px solid #6b46c1",
-  background: "linear-gradient(180deg,#7c3aed,#5b21b6)",
-  color: "#fff",
-  cursor: "pointer",
-  fontWeight: 600,
-  boxShadow: "0 10px 30px rgba(124,58,237,.35)",
-};
-const btnMuted: React.CSSProperties = {
-  padding: "12px 16px",
-  borderRadius: 10,
-  border: "1px solid rgba(255,255,255,.25)",
-  background: "transparent",
-  color: "#e7e9ee",
-  cursor: "pointer",
-};
-const pill: React.CSSProperties = {
-  margin: "10px 0 14px",
-  padding: "10px 12px",
-  borderRadius: 12,
-  border: "1px dashed rgba(255,255,255,.25)",
-};
-const mono: React.CSSProperties = { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" };
-const errBox: React.CSSProperties = {
-  background: "rgba(255,0,0,0.08)",
-  border: "1px solid rgba(255,0,0,0.3)",
-  color: "#ffd5d5",
-  padding: 10,
-  borderRadius: 10,
-};
-const okBox: React.CSSProperties = {
-  background: "rgba(0,180,0,0.08)",
-  border: "1px solid rgba(0,180,0,0.35)",
-  color: "#9effc6",
-  padding: 10,
-  borderRadius: 10,
-};
-const note: React.CSSProperties = { marginTop: 10, fontSize: 12, opacity: 0.8 };
-const devBox: React.CSSProperties = {
-  marginTop: 14,
-  padding: "8px 10px",
-  borderRadius: 10,
-  border: "1px dashed rgba(255,255,255,.2)",
-  opacity: 0.85,
-};
-
-/** Safe JSON from fetch Response */
-async function safeJson(r: Response) {
-  try {
-    return await r.json();
-  } catch {
-    return undefined;
-  }
-}
-
-/** Attach a hint to an Error */
-function withHint(message: string, hint?: string) {
-  const e: any = new Error(message);
-  if (hint) e.hint = hint;
-  return e;
-}
+const css = String.raw`
+.signin-wrap { min-height:100dvh; display:grid; place-items:center; position:relative; overflow:hidden; background:#0b1020; color:#e7e9ee; }
+.bg { position:absolute; inset:-20%; background:
+  radial-gradient(60% 40% at 20% 10%, rgba(99,102,241,.25), transparent 60%),
+  radial-gradient(50% 40% at 80% 20%, rgba(236,72,153,.25), transparent 60%),
+  radial-gradient(40% 30% at 40% 80%, rgba(16,185,129,.25), transparent 60%); filter: blur(80px); }
+.card { position:relative; z-index:1; width:min(92vw,520px); border:1px solid rgba(255,255,255,.08); border-radius:16px; padding:22px; background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03)); backdrop-filter: blur(6px); box-shadow:0 10px 50px rgba(0,0,0,.4); }
+.logo { width:56px; height:56px; border-radius:14px; display:grid; place-items:center; background:linear-gradient(135deg,#6366f1,#ec4899); color:#fff; font-weight:900; letter-spacing:.5px; }
+h1 { margin: 12px 0 4px; font-size: 22px; font-weight: 900; }
+.sub { margin: 0 0 16px; opacity:.8; }
+.pill { display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:12px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.12); }
+.pill.muted { opacity:.7; }
+.pill-label { opacity:.7; font-size:12px; }
+.pill-value { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break:break-all; }
+.btn-row { display:flex; gap:10px; margin-top:12px; }
+.btn-primary { padding:10px 14px; border-radius:10px; border:1px solid #6b46c1; background:linear-gradient(180deg,#7c3aed,#5b21b6); color:#fff; cursor:pointer; font-weight:700; box-shadow:0 6px 20px rgba(124,58,237,.35); }
+.btn-muted { padding:10px 14px; border-radius:10px; border:1px solid rgba(255,255,255,.25); background:transparent; color:#e7e9ee; cursor:pointer; }
+.alert { background:rgba(255,0,0,0.08); border:1px solid rgba(255,0,0,0.3); color:#ffd5d5; padding:10px; border-radius:10px; margin-top:12px; }
+.ok { background:rgba(0,180,0,0.08); border:1px solid rgba(0,180,0,0.35); color:#d5ffe0; padding:10px; border-radius:10px; margin-top:12px; }
+.ghost { margin-top:12px; padding:10px 12px; border-radius:12px; border:1px dashed rgba(255,255,255,.2); opacity:.8; }
+.tiny { margin-top:8px; opacity:.75; font-size:12px; }
+.tiny.dev { margin-top:12px; }
+.tip { margin-top:4px; opacity:.7; font-size:12px; }
+code { background: rgba(0,0,0,.35); padding:1px 4px; border-radius:6px; }
+`;
