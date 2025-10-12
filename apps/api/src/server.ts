@@ -1,3 +1,4 @@
+// apps/api/src/server.ts
 import express from "express";
 import type { CookieOptions, RequestHandler } from "express";
 import helmet from "helmet";
@@ -39,27 +40,29 @@ app.use(cookieParser());
 
 // ----- CORS -----
 function isAllowedOrigin(origin?: string | null) {
-  if (!origin) return true;
+  if (!origin) return true; // allow curl/postman
   if (allowed.includes(origin)) return true;
   try {
     const u = new URL(origin);
-    if (u.hostname.endsWith(".vercel.app")) return true;
+    if (u.hostname.endsWith(".vercel.app")) return true; // allow Vercel previews
   } catch {}
   return false;
 }
 
-// Wrap cors() so it’s a plain Express RequestHandler (fixes TS overloads)
-const corsMiddleware: RequestHandler = (req, res, next) =>
-  cors({
-    origin: (origin, cb) => cb(null, isAllowedOrigin(origin)),
-    credentials: true,
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-    optionsSuccessStatus: 204,
-  })(req, res, next);
+// Wrap cors() and register as plain handlers (cast away Express v5 overload noise)
+const corsMiddleware: RequestHandler = cors({
+  origin: (origin, cb) => cb(null, isAllowedOrigin(origin)),
+  credentials: true,
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  optionsSuccessStatus: 204,
+}) as unknown as RequestHandler;
 
-app.options("*", corsMiddleware);
-app.use(corsMiddleware);
+// ⬇️ TypeScript workaround for Express v5 overloads
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(app as any).options("*", corsMiddleware);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(app as any).use(corsMiddleware);
 
 // ---------- Helpers ----------
 type NonceCookiePayload = {
