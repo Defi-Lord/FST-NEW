@@ -1,4 +1,6 @@
-import express, { CookieOptions } from "express";
+// apps/api/src/server.ts
+import express from "express";
+import type { CookieOptions, RequestHandler } from "express";
 import helmet from "helmet";
 import cors from "cors";
 import cookieParser from "cookie-parser";
@@ -32,7 +34,7 @@ const PORT = Number(process.env.PORT) || 4000;
 // ---------- App ----------
 const app = express();
 
-// behind reverse proxies (Render, Railway, Fly.io, etc.)
+// behind reverse proxies (Render/Railway/etc.)
 app.set("trust proxy", 1);
 
 app.use(helmet());
@@ -45,20 +47,23 @@ function isAllowedOrigin(origin?: string | null) {
   if (allowed.includes(origin)) return true;
   try {
     const u = new URL(origin);
-    if (u.hostname.endsWith(".vercel.app")) return true; // allow all vercel previews
+    if (u.hostname.endsWith(".vercel.app")) return true; // allow Vercel previews
   } catch {}
   return false;
 }
 
-app.use(
-  cors({
-    origin: (origin, cb) => cb(null, isAllowedOrigin(origin)),
-    credentials: true,
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-    optionsSuccessStatus: 204,
-  })
-);
+// Explicitly type the CORS middleware to avoid Express v5 overload issues
+const corsMiddleware: RequestHandler = cors({
+  origin: (origin, cb) => cb(null, isAllowedOrigin(origin)),
+  credentials: true,
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  optionsSuccessStatus: 204,
+}) as unknown as RequestHandler;
+
+// Preflight + actual CORS
+app.options("*", corsMiddleware);
+app.use(corsMiddleware);
 
 // ---------- Helpers ----------
 type NonceCookiePayload = {
@@ -71,10 +76,8 @@ type NonceCookiePayload = {
   jti: string;
 };
 
-// accept only base fields (no duplicate `t`)
 type NonceBase = Pick<NonceCookiePayload, "wallet" | "nonce" | "msg">;
 
-// detect https from proxy headers for per-request cookie 'secure' flag
 function isRequestSecure(req: express.Request) {
   const xfProto = String(req.headers["x-forwarded-proto"] || "");
   return FORCE_SECURE_COOKIES || IS_PROD || xfProto.includes("https");
@@ -210,8 +213,7 @@ app.post("/auth/verify", async (req, res) => {
     if (!ok) return res.status(401).json({ error: "Invalid signature" });
 
     // ----- Upsert user + wallet -----
-    // NOTE: Model names can vary between schemas. To avoid TS compile errors during build,
-    // we cast prisma to any here. Make sure your Prisma schema has models: User, Wallet, Session.
+    // Cast to any to avoid TS errors if Prisma model names differ slightly.
     const db: any = prisma;
 
     const existingWallet = await db.wallet?.findFirst?.({
