@@ -22,6 +22,9 @@ if (!JWT_SECRET) {
 const NODE_ENV = process.env.NODE_ENV || "development";
 const IS_PROD = NODE_ENV === "production";
 
+// optional override if your host doesn't set NODE_ENV=production
+const FORCE_SECURE_COOKIES = process.env.FORCE_SECURE_COOKIES === "1";
+
 const allowed = (process.env.CORS_ORIGIN ?? "")
   .split(",")
   .map((s) => s.trim())
@@ -32,27 +35,36 @@ const PORT = Number(process.env.PORT) || 4000;
 // ---------- App ----------
 const app = express();
 
+// IMPORTANT for cookies behind reverse proxies (Render/Fly/Heroku/etc.)
+app.set("trust proxy", 1);
+
 app.use(helmet());
 app.use(express.json());
 app.use(cookieParser());
 
-// Allow exact origins (CORS_ORIGIN) + any *.vercel.app preview
+// ----- CORS -----
 function isAllowedOrigin(origin?: string | null) {
   if (!origin) return true; // allow curl/postman
   if (allowed.includes(origin)) return true;
   try {
     const u = new URL(origin);
+    // allow any vercel preview or custom Vercel domain
     if (u.hostname.endsWith(".vercel.app")) return true;
   } catch {}
   return false;
 }
 
-app.use(
-  cors({
-    origin: (origin, cb) => cb(null, isAllowedOrigin(origin)),
-    credentials: true,
-  })
-);
+const corsMiddleware = cors({
+  origin: (origin, cb) => cb(null, isAllowedOrigin(origin)),
+  credentials: true,
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  optionsSuccessStatus: 204,
+});
+
+// handle preflights early
+app.options("*", corsMiddleware);
+app.use(corsMiddleware);
 
 // ---------- Helpers ----------
 type NonceCookiePayload = {
@@ -65,6 +77,12 @@ type NonceCookiePayload = {
   jti: string;
 };
 
+// detect https from proxy headers for per-request cookie 'secure' flag
+function isRequestSecure(req: express.Request) {
+  const xfProto = (req.headers["x-forwarded-proto"] || "") as string;
+  return FORCE_SECURE_COOKIES || IS_PROD || xfProto.includes("https");
+}
+
 function signNonceCookie(payload: Omit<NonceCookiePayload, "iat" | "exp" | "jti">) {
   const jti = randomUUID();
   const token = jwt.sign({ t: "nonce", ...payload }, JWT_SECRET, {
@@ -75,6 +93,7 @@ function signNonceCookie(payload: Omit<NonceCookiePayload, "iat" | "exp" | "jti"
 }
 
 function setCookie(
+  req: express.Request,
   res: express.Response,
   name: string,
   value: string,
@@ -85,18 +104,18 @@ function setCookie(
     httpOnly: true,
     // Cross-site SPA <-> API requires SameSite=None and Secure
     sameSite: "none",
-    secure: IS_PROD,
+    secure: isRequestSecure(req),
     maxAge: maxAgeMs,
     path: "/",
     ...options,
   });
 }
 
-function clearCookie(res: express.Response, name: string) {
+function clearCookie(req: express.Request, res: express.Response, name: string) {
   res.clearCookie(name, {
     httpOnly: true,
     sameSite: "none",
-    secure: IS_PROD,
+    secure: isRequestSecure(req),
     path: "/",
   });
 }
@@ -105,9 +124,21 @@ function toBytes(str: string): Uint8Array {
   return new TextEncoder().encode(str);
 }
 
-// ---------- Routes ----------
+// ---------- Diagnostics (optional) ----------
 app.get("/public/healthz", (_req, res) => res.json({ ok: true }));
 
+app.get("/public/debug/cors", (req, res) => {
+  res.json({
+    ok: true,
+    origin: req.headers.origin || null,
+    xfwdProto: req.headers["x-forwarded-proto"] || null,
+    cookies: Object.keys(req.cookies || {}),
+    allowedFromEnv: allowed,
+    nodeEnv: NODE_ENV,
+  });
+});
+
+// ---------- Auth ----------
 /**
  * GET /auth/nonce?wallet=<base58>
  * Returns the exact message to sign + sets an HttpOnly "nonce" cookie (JWT, 5m)
@@ -127,7 +158,7 @@ app.get("/auth/nonce", async (req, res) => {
       `\nBy signing, you prove ownership of this wallet.`;
 
     const { token } = signNonceCookie({ wallet, nonce, msg: message });
-    setCookie(res, "nonce", token, 5 * 60 * 1000); // 5 minutes
+    setCookie(req, res, "nonce", token, 5 * 60 * 1000); // 5 minutes
 
     return res.json({
       wallet,
@@ -144,7 +175,7 @@ app.get("/auth/nonce", async (req, res) => {
 /**
  * POST /auth/verify
  * Body: { walletAddress: string, signatureBase58: string, message?: string }
- * Verifies signature over the EXACT message from /auth/nonce.
+ * Verifies signature over the EXACT message from /auth/nonce (or body fallback).
  * Upserts User + Wallet, creates a Session, returns a 30-day JWT.
  */
 app.post("/auth/verify", async (req, res) => {
@@ -154,7 +185,7 @@ app.post("/auth/verify", async (req, res) => {
       return res.status(400).json({ error: "walletAddress and signatureBase58 are required" });
     }
 
-    // Read + verify the nonce cookie (primary)
+    // Prefer cookie message; accept body fallback if cookie missing/expired
     const nonceCookie = req.cookies?.nonce;
     let messageFromCookie: string | null = null;
 
@@ -167,7 +198,7 @@ app.post("/auth/verify", async (req, res) => {
         }
         messageFromCookie = nonceData.msg;
       } catch {
-        // ignore; we may still accept explicit message if provided
+        // ignore; fall back to body
       }
     }
 
@@ -226,8 +257,8 @@ app.post("/auth/verify", async (req, res) => {
       data: { id: sessionId, userId, jwtId: jti, expiresAt },
     });
 
-    clearCookie(res, "nonce");
-    setCookie(res, "auth", authToken, 30 * 24 * 60 * 60 * 1000);
+    clearCookie(req, res, "nonce");
+    setCookie(req, res, "auth", authToken, 30 * 24 * 60 * 60 * 1000);
 
     return res.json({
       ok: true,
