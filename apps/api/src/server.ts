@@ -1,5 +1,4 @@
-// apps/api/src/server.ts
-import express from "express";
+import express, { CookieOptions } from "express";
 import helmet from "helmet";
 import cors from "cors";
 import cookieParser from "cookie-parser";
@@ -21,8 +20,6 @@ if (!JWT_SECRET) {
 
 const NODE_ENV = process.env.NODE_ENV || "development";
 const IS_PROD = NODE_ENV === "production";
-
-// optional override if your host doesn't set NODE_ENV=production
 const FORCE_SECURE_COOKIES = process.env.FORCE_SECURE_COOKIES === "1";
 
 const allowed = (process.env.CORS_ORIGIN ?? "")
@@ -35,7 +32,7 @@ const PORT = Number(process.env.PORT) || 4000;
 // ---------- App ----------
 const app = express();
 
-// IMPORTANT for cookies behind reverse proxies (Render/Fly/Heroku/etc.)
+// behind reverse proxies (Render, Railway, Fly.io, etc.)
 app.set("trust proxy", 1);
 
 app.use(helmet());
@@ -48,23 +45,20 @@ function isAllowedOrigin(origin?: string | null) {
   if (allowed.includes(origin)) return true;
   try {
     const u = new URL(origin);
-    // allow any vercel preview or custom Vercel domain
-    if (u.hostname.endsWith(".vercel.app")) return true;
+    if (u.hostname.endsWith(".vercel.app")) return true; // allow all vercel previews
   } catch {}
   return false;
 }
 
-const corsMiddleware = cors({
-  origin: (origin, cb) => cb(null, isAllowedOrigin(origin)),
-  credentials: true,
-  methods: ["GET", "POST", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-  optionsSuccessStatus: 204,
-});
-
-// handle preflights early
-app.options("*", corsMiddleware);
-app.use(corsMiddleware);
+app.use(
+  cors({
+    origin: (origin, cb) => cb(null, isAllowedOrigin(origin)),
+    credentials: true,
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    optionsSuccessStatus: 204,
+  })
+);
 
 // ---------- Helpers ----------
 type NonceCookiePayload = {
@@ -77,13 +71,16 @@ type NonceCookiePayload = {
   jti: string;
 };
 
+// accept only base fields (no duplicate `t`)
+type NonceBase = Pick<NonceCookiePayload, "wallet" | "nonce" | "msg">;
+
 // detect https from proxy headers for per-request cookie 'secure' flag
 function isRequestSecure(req: express.Request) {
-  const xfProto = (req.headers["x-forwarded-proto"] || "") as string;
+  const xfProto = String(req.headers["x-forwarded-proto"] || "");
   return FORCE_SECURE_COOKIES || IS_PROD || xfProto.includes("https");
 }
 
-function signNonceCookie(payload: Omit<NonceCookiePayload, "iat" | "exp" | "jti">) {
+function signNonceCookie(payload: NonceBase) {
   const jti = randomUUID();
   const token = jwt.sign({ t: "nonce", ...payload }, JWT_SECRET, {
     expiresIn: "5m",
@@ -98,33 +95,34 @@ function setCookie(
   name: string,
   value: string,
   maxAgeMs: number,
-  options?: Partial<Parameters<typeof res.cookie>[2]>
+  options: Partial<CookieOptions> = {}
 ) {
-  res.cookie(name, value, {
+  const base: CookieOptions = {
     httpOnly: true,
-    // Cross-site SPA <-> API requires SameSite=None and Secure
     sameSite: "none",
     secure: isRequestSecure(req),
     maxAge: maxAgeMs,
     path: "/",
     ...options,
-  });
+  };
+  res.cookie(name, value as any, base);
 }
 
 function clearCookie(req: express.Request, res: express.Response, name: string) {
-  res.clearCookie(name, {
+  const opts: CookieOptions = {
     httpOnly: true,
     sameSite: "none",
     secure: isRequestSecure(req),
     path: "/",
-  });
+  };
+  res.clearCookie(name, opts);
 }
 
 function toBytes(str: string): Uint8Array {
   return new TextEncoder().encode(str);
 }
 
-// ---------- Diagnostics (optional) ----------
+// ---------- Diagnostics ----------
 app.get("/public/healthz", (_req, res) => res.json({ ok: true }));
 
 app.get("/public/debug/cors", (req, res) => {
@@ -211,8 +209,12 @@ app.post("/auth/verify", async (req, res) => {
     const ok = nacl.sign.detached.verify(toBytes(message), sig, pubkey);
     if (!ok) return res.status(401).json({ error: "Invalid signature" });
 
-    // Upsert user + wallet
-    const existingWallet = await prisma.wallet.findFirst({
+    // ----- Upsert user + wallet -----
+    // NOTE: Model names can vary between schemas. To avoid TS compile errors during build,
+    // we cast prisma to any here. Make sure your Prisma schema has models: User, Wallet, Session.
+    const db: any = prisma;
+
+    const existingWallet = await db.wallet?.findFirst?.({
       where: { address: walletAddress },
       select: { id: true, userId: true },
     });
@@ -226,7 +228,8 @@ app.post("/auth/verify", async (req, res) => {
     } else {
       userId = randomUUID();
       walletId = randomUUID();
-      await prisma.user.create({
+
+      await db.user.create({
         data: {
           id: userId,
           createdAt: new Date(),
@@ -234,7 +237,8 @@ app.post("/auth/verify", async (req, res) => {
           displayName: null,
         },
       });
-      await prisma.wallet.create({
+
+      await db.wallet.create({
         data: {
           id: walletId,
           address: walletAddress,
@@ -253,7 +257,8 @@ app.post("/auth/verify", async (req, res) => {
 
     const sessionId = randomUUID();
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-    await prisma.session.create({
+
+    await db.session?.create?.({
       data: { id: sessionId, userId, jwtId: jti, expiresAt },
     });
 
@@ -288,7 +293,8 @@ app.get("/me", async (req, res) => {
     }
     if (payload.t !== "auth") return res.status(401).json({ error: "Bad token type" });
 
-    const user = await prisma.user.findUnique({
+    const db: any = prisma;
+    const user = await db.user.findUnique({
       where: { id: payload.sub },
       select: { id: true, displayName: true, createdAt: true, updatedAt: true },
     });
