@@ -1,4 +1,3 @@
-// apps/api/src/server.ts
 import express from "express";
 import type { CookieOptions, RequestHandler } from "express";
 import helmet from "helmet";
@@ -33,35 +32,32 @@ const PORT = Number(process.env.PORT) || 4000;
 
 // ---------- App ----------
 const app = express();
-
-// behind reverse proxies (Render/Railway/etc.)
 app.set("trust proxy", 1);
-
 app.use(helmet());
 app.use(express.json());
 app.use(cookieParser());
 
 // ----- CORS -----
 function isAllowedOrigin(origin?: string | null) {
-  if (!origin) return true; // allow curl/postman
+  if (!origin) return true;
   if (allowed.includes(origin)) return true;
   try {
     const u = new URL(origin);
-    if (u.hostname.endsWith(".vercel.app")) return true; // allow Vercel previews
+    if (u.hostname.endsWith(".vercel.app")) return true;
   } catch {}
   return false;
 }
 
-// Explicitly type the CORS middleware to avoid Express v5 overload issues
-const corsMiddleware: RequestHandler = cors({
-  origin: (origin, cb) => cb(null, isAllowedOrigin(origin)),
-  credentials: true,
-  methods: ["GET", "POST", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-  optionsSuccessStatus: 204,
-}) as unknown as RequestHandler;
+// Wrap cors() so it’s a plain Express RequestHandler (fixes TS overloads)
+const corsMiddleware: RequestHandler = (req, res, next) =>
+  cors({
+    origin: (origin, cb) => cb(null, isAllowedOrigin(origin)),
+    credentials: true,
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    optionsSuccessStatus: 204,
+  })(req, res, next);
 
-// Preflight + actual CORS
 app.options("*", corsMiddleware);
 app.use(corsMiddleware);
 
@@ -75,7 +71,6 @@ type NonceCookiePayload = {
   exp: number;
   jti: string;
 };
-
 type NonceBase = Pick<NonceCookiePayload, "wallet" | "nonce" | "msg">;
 
 function isRequestSecure(req: express.Request) {
@@ -127,7 +122,6 @@ function toBytes(str: string): Uint8Array {
 
 // ---------- Diagnostics ----------
 app.get("/public/healthz", (_req, res) => res.json({ ok: true }));
-
 app.get("/public/debug/cors", (req, res) => {
   res.json({
     ok: true,
@@ -140,10 +134,6 @@ app.get("/public/debug/cors", (req, res) => {
 });
 
 // ---------- Auth ----------
-/**
- * GET /auth/nonce?wallet=<base58>
- * Returns the exact message to sign + sets an HttpOnly "nonce" cookie (JWT, 5m)
- */
 app.get("/auth/nonce", async (req, res) => {
   try {
     const wallet = String(req.query.wallet || "").trim();
@@ -159,26 +149,15 @@ app.get("/auth/nonce", async (req, res) => {
       `\nBy signing, you prove ownership of this wallet.`;
 
     const { token } = signNonceCookie({ wallet, nonce, msg: message });
-    setCookie(req, res, "nonce", token, 5 * 60 * 1000); // 5 minutes
+    setCookie(req, res, "nonce", token, 5 * 60 * 1000);
 
-    return res.json({
-      wallet,
-      nonce,
-      message,
-      expiresInSec: 300,
-    });
+    return res.json({ wallet, nonce, message, expiresInSec: 300 });
   } catch (err) {
     console.error("nonce error", err);
     return res.status(500).json({ error: "Internal error" });
   }
 });
 
-/**
- * POST /auth/verify
- * Body: { walletAddress: string, signatureBase58: string, message?: string }
- * Verifies signature over the EXACT message from /auth/nonce (or body fallback).
- * Upserts User + Wallet, creates a Session, returns a 30-day JWT.
- */
 app.post("/auth/verify", async (req, res) => {
   try {
     const { walletAddress, signatureBase58, message: bodyMessage } = req.body ?? {};
@@ -186,7 +165,6 @@ app.post("/auth/verify", async (req, res) => {
       return res.status(400).json({ error: "walletAddress and signatureBase58 are required" });
     }
 
-    // Prefer cookie message; accept body fallback if cookie missing/expired
     const nonceCookie = req.cookies?.nonce;
     let messageFromCookie: string | null = null;
 
@@ -198,22 +176,18 @@ app.post("/auth/verify", async (req, res) => {
           return res.status(400).json({ error: "Wallet mismatch with nonce" });
         }
         messageFromCookie = nonceData.msg;
-      } catch {
-        // ignore; fall back to body
-      }
+      } catch {}
     }
 
     const message = messageFromCookie ?? bodyMessage;
     if (!message) return res.status(400).json({ error: "Missing nonce message" });
 
-    // Verify signature
     const sig = bs58.decode(signatureBase58);
     const pubkey = bs58.decode(walletAddress);
     const ok = nacl.sign.detached.verify(toBytes(message), sig, pubkey);
     if (!ok) return res.status(401).json({ error: "Invalid signature" });
 
-    // ----- Upsert user + wallet -----
-    // Cast to any to avoid TS errors if Prisma model names differ slightly.
+    // Prisma models (cast for TS safety if schema names differ)
     const db: any = prisma;
 
     const existingWallet = await db.wallet?.findFirst?.({
@@ -250,7 +224,6 @@ app.post("/auth/verify", async (req, res) => {
       });
     }
 
-    // Create a 30-day auth JWT + Session row
     const jti = randomUUID();
     const authToken = jwt.sign({ sub: userId, wid: walletId, t: "auth" }, JWT_SECRET, {
       expiresIn: "30d",
@@ -260,27 +233,19 @@ app.post("/auth/verify", async (req, res) => {
     const sessionId = randomUUID();
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
-    await db.session?.create?.({
-      data: { id: sessionId, userId, jwtId: jti, expiresAt },
-    });
+    await db.session?.create?.({ data: { id: sessionId, userId, jwtId: jti, expiresAt } });
 
     clearCookie(req, res, "nonce");
     setCookie(req, res, "auth", authToken, 30 * 24 * 60 * 60 * 1000);
 
-    return res.json({
-      ok: true,
-      token: authToken,
-      userId,
-      walletId,
-      expiresAt: expiresAt.toISOString(),
-    });
+    return res.json({ ok: true, token: authToken, userId, walletId, expiresAt: expiresAt.toISOString() });
   } catch (err) {
     console.error("verify error", err);
     return res.status(500).json({ error: "Internal error" });
   }
 });
 
-// Example protected route (Authorization: Bearer <token>)
+// Example protected route
 app.get("/me", async (req, res) => {
   try {
     const auth = req.headers.authorization || "";
