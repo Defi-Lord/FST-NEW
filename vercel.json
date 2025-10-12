@@ -1,0 +1,9 @@
+{
+  "buildCommand": "npm ci && npm run build:web",
+  "outputDirectory": "dist",
+  "installCommand": "npm ci",
+  "ignoreCommand": "git diff --quiet origin/main...HEAD || echo 'changes'",
+  "env": {
+    "VITE_API_BASE": "https://fst-api.onrender.com"
+  }
+}
