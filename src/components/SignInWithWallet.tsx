@@ -3,7 +3,7 @@ import React, { useCallback, useMemo, useState } from "react";
 
 /**
  * API base:
- * - In production, set VITE_API_BASE to your Render API URL (e.g. https://fst-api.onrender.com).
+ * - In production, set VITE_API_BASE to your Render/Railway API URL (https).
  * - In dev (vite), defaults to http://localhost:4000 if not set.
  */
 function computeApiBase() {
@@ -109,15 +109,14 @@ export default function SignInWithWallet({ onSignedIn }: { onSignedIn?: () => vo
       }
       const wallet = address || (await connectWallet());
 
-      // 1) Get nonce MESSAGE (server also sets cookie; we’ll still pass message explicitly)
+      // 1) Get nonce MESSAGE (server sets nonce cookie; we also use explicit message)
       setStatus({ kind: "gettingNonce" });
       const nonceUrl = `${API_BASE}/auth/nonce?wallet=${encodeURIComponent(wallet)}`;
       const nonceRes = await fetch(nonceUrl, { method: "GET", credentials: "include" });
       if (!nonceRes.ok) {
         let hint: string | undefined;
         if (nonceRes.status === 400 || nonceRes.status === 500) {
-          hint =
-            "If this is a preview domain, ensure Render CORS includes https://*.vercel.app and cookies use SameSite=None; Secure.";
+          hint = "If this is a preview domain, API must allow https://*.vercel.app and use SameSite=None; Secure cookies.";
         }
         throw { message: `Nonce request failed (${nonceRes.status})`, hint };
       }
@@ -136,7 +135,7 @@ export default function SignInWithWallet({ onSignedIn }: { onSignedIn?: () => vo
       const { signature } = await phantom.signMessage!(toBytes(message), "utf8");
       const signatureBase58 = base58Encode(signature);
 
-      // 3) Verify signature (body contains wallet + signature; server may read nonce from cookie or message)
+      // 3) Verify signature (body contains wallet + signature + message)
       setStatus({ kind: "verifying" });
       const verifyRes = await fetch(`${API_BASE}/auth/verify`, {
         method: "POST",
@@ -148,8 +147,8 @@ export default function SignInWithWallet({ onSignedIn }: { onSignedIn?: () => vo
       if (!verifyRes.ok) {
         const txt = await verifyRes.text().catch(() => "");
         let hint: string | undefined;
-        if (verifyRes.status === 400) hint = "Missing/invalid nonce. Ensure the same domain is allowed in CORS and cookies aren’t blocked.";
-        if (verifyRes.status === 500) hint = "Server error. Check Render logs for /auth/verify.";
+        if (verifyRes.status === 400) hint = "Missing/invalid nonce. Ensure CORS allows your Vercel domain and cookies aren’t blocked.";
+        if (verifyRes.status === 500) hint = "Server error. Check API logs for /auth/verify.";
         throw { message: `Verify failed (${verifyRes.status})${txt ? `: ${txt}` : ""}`, hint };
       }
 
@@ -165,7 +164,6 @@ export default function SignInWithWallet({ onSignedIn }: { onSignedIn?: () => vo
       }
       setStatus({ kind: "success", userId: data.userId, token: data.token });
 
-      // let parent know so router can advance
       onSignedIn?.();
     } catch (e: any) {
       const msg = e?.message || "Something went wrong";
@@ -243,11 +241,7 @@ export default function SignInWithWallet({ onSignedIn }: { onSignedIn?: () => vo
           {status.kind === "success" && (
             <div className="ok">
               <div>✅ Signed in!</div>
-              {status.token && (
-                <div className="tiny">
-                  JWT stored locally (auth cookie may also be set).
-                </div>
-              )}
+              {status.token && <div className="tiny">JWT stored locally (auth cookie may also be set).</div>}
             </div>
           )}
 
