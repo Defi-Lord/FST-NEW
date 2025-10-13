@@ -9,38 +9,44 @@ import {
   useNavigate,
   Link,
 } from "react-router-dom";
-import SignInWithWallet from "./components/SignInWithWallet";
+
+// ⬇️ Use the new, gorgeous sign-in page we built
+import SolanaSignIn from "./pages/SolanaSignIn";
+
 import ProfilePage from "./pages_Profile";
 import HistoryPage from "./pages_History";
 import AdminPage from "./pages_Admin";
 
-const API_BASE =
-  (import.meta as any)?.env?.VITE_API_BASE?.replace(/\/+$/, "") || "";
+/** Read token from either the new or old key */
+function getAuthToken(): string | null {
+  return (
+    window.localStorage.getItem("authToken") ||
+    window.localStorage.getItem("auth_token")
+  );
+}
 
 function useAuth() {
   const [authed, setAuthed] = React.useState<boolean | null>(null);
   React.useEffect(() => {
-    const t = localStorage.getItem("auth_token");
-    setAuthed(!!t);
+    setAuthed(!!getAuthToken());
   }, []);
   return authed;
 }
 
+/** Landing now shows the polished Solana sign-in page */
 function Landing() {
   const nav = useNavigate();
   return (
     <div style={wrap}>
       <div style={card}>
         <div style={logo}>FST</div>
-        <h1 style={{ margin: "6px 0 6px" }}>Sign in with Solana</h1>
+        <h1 style={{ margin: "6px 0 6px" }}>Welcome</h1>
         <p style={{ opacity: 0.8, marginTop: 0 }}>
-          Secure sign in using your Phantom wallet.
+          Sign in securely with your Phantom wallet to continue.
         </p>
 
-        <SignInWithWallet onSuccess={() => nav("/home", { replace: true })} />
-
-        <div style={{ marginTop: 12, opacity: 0.75, fontSize: 12 }}>
-          API: <code>{API_BASE || "(missing VITE_API_BASE)"}</code>
+        <div style={{ marginTop: 8 }}>
+          <SolanaSignIn onSignedIn={() => nav("/home", { replace: true })} />
         </div>
       </div>
       <div style={bg} />
@@ -54,13 +60,24 @@ function Home() {
       <div style={card}>
         <div style={logo}>FST</div>
         <h1 style={{ margin: "6px 0 6px" }}>Home</h1>
-        <p style={{ opacity: 0.8, margin: "0 0 12px" }}>
-          Where to?
-        </p>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
-          <Link to="/profile" style={btnMuted}>Profile</Link>
-          <Link to="/history" style={btnMuted}>History</Link>
-          <Link to="/admin" style={btnMuted}>Admin</Link>
+        <p style={{ opacity: 0.8, margin: "0 0 12px" }}>Where to?</p>
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            flexWrap: "wrap",
+            justifyContent: "center",
+          }}
+        >
+          <Link to="/profile" style={btnMuted}>
+            Profile
+          </Link>
+          <Link to="/history" style={btnMuted}>
+            History
+          </Link>
+          <Link to="/admin" style={btnMuted}>
+            Admin
+          </Link>
         </div>
       </div>
       <div style={bg} />
@@ -70,7 +87,7 @@ function Home() {
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const authed = useAuth();
-  if (authed === null) return null;
+  if (authed === null) return null; // initial load
   return authed ? <>{children}</> : <Navigate to="/" replace />;
 }
 
@@ -115,7 +132,7 @@ const App = () => (
   </BrowserRouter>
 );
 
-/** styles */
+/** styles — kept your clean glass look */
 const wrap: React.CSSProperties = {
   minHeight: "100dvh",
   display: "grid",
@@ -153,7 +170,7 @@ const logo: React.CSSProperties = {
   margin: "0 auto 12px",
   display: "grid",
   placeItems: "center",
-  background: "linear-gradient(135deg, #7c3aed, #ec4899)",
+  background: "linear-gradient(135deg, #7c3aed, #06b6d4)",
   color: "#fff",
   fontWeight: 900,
   letterSpacing: ".5px",
