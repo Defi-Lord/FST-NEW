@@ -46,8 +46,8 @@ const safeSetSaved = (addr: string | null) => {
 }
 const setJWT = (token: string | null) => {
   try {
-    if (!token) localStorage.removeItem('auth_token')
-    else localStorage.setItem('auth_token', token)
+    if (!token) localStorage.removeItem('fst_jwt')
+    else localStorage.setItem('fst_jwt', token)
   } catch {}
 }
 
@@ -74,18 +74,16 @@ async function fetchNonce(walletAddress: string) {
   const res = await fetch(`${API_BASE}/auth/nonce`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
     body: JSON.stringify({ walletAddress }),
   })
   if (!res.ok) throw new Error(`Nonce error: ${res.status}`)
-  return res.json() as Promise<{ nonce: string; message?: string }>
+  return res.json() as Promise<{ nonce: string; message: string }>
 }
 
 async function verifySignature(payload: { walletAddress: string, nonce: string, signature: string }) {
   const res = await fetch(`${API_BASE}/auth/verify`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
     body: JSON.stringify(payload),
   })
   if (!res.ok) {
@@ -96,17 +94,18 @@ async function verifySignature(payload: { walletAddress: string, nonce: string, 
   return res.json() as Promise<{ token: string }>
 }
 
-/** Sign + verify flow (server returns the exact nonce; we sign the nonce) */
+/** Sign + verify flow (server returns the exact message to sign) */
 async function signAndVerify(provider: any, walletAddress: string) {
-  // 1) get nonce
-  const { nonce } = await fetchNonce(walletAddress)
+  // 1) get nonce + message (message must match server; do not hardcode)
+  const { nonce, message } = await fetchNonce(walletAddress)
 
-  // 2) sign with wallet (message = nonce)
+  // 2) sign with wallet
   const enc = new TextEncoder()
   if (!provider?.signMessage) {
     throw new Error('This wallet cannot sign messages. Enable "Message signing" in wallet settings.')
   }
-  const signed = await provider.signMessage(enc.encode(nonce), 'utf8')
+  // Some wallets return {signature}, others a Uint8Array directly — normalize:
+  const signed = await provider.signMessage(enc.encode(message), 'utf8')
   const rawSig: Uint8Array =
     signed?.signature instanceof Uint8Array ? signed.signature : new Uint8Array(signed)
   const signatureBase64 = toBase64(rawSig)
@@ -523,7 +522,7 @@ function IconGeneric() {
   )
 }
 
-/* ---------- Styles ---------- */
+/* ---------- Styles (kept from your original, with neutral fills so they match your theme) ---------- */
 function Style() {
   return (
     <style>{`
