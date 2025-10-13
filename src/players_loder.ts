@@ -20,7 +20,7 @@ async function fetchJSON<T>(url: string): Promise<T | null> {
 }
 
 export async function loadPlayersLoder(): Promise<Bootstrap | null> {
-  // 1) env
+  // 1) explicit env
   if (envUrl) {
     const u = envUrl.replace(/\/+$/, '')
     const data = await fetchJSON<Bootstrap>(u)
@@ -33,10 +33,13 @@ export async function loadPlayersLoder(): Promise<Bootstrap | null> {
     if (data) return data
   }
 
-  // 3) local
+  // 3) local file
   const local = await fetchJSON<Bootstrap>(LOCAL_SNAPSHOT_URL)
   if (local) return local
 
   console.warn('[players_loder] Could not load bootstrap-static from any source.')
   return null
 }
+
+// Canonical, correctly spelled alias:
+export const loadPlayersLoader = loadPlayersLoder
