@@ -1,7 +1,30 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
-/** API base (set in Vercel env as VITE_API_BASE = https://fst-api.onrender.com) */
-const API_BASE = String((import.meta as any)?.env?.VITE_API_BASE || "").replace(/\/+$/, "");
+/** ──────────────────────────────────────────────────────────────────────────────
+ * API base
+ * Priority: 1) import.meta.env.VITE_API_BASE  2) window.__API_BASE__  3) fallback
+ *    - PROD fallback: https://fst-api.onrender.com
+ *    - DEV  fallback: http://localhost:4000
+ * ────────────────────────────────────────────────────────────────────────────── */
+function resolveApiBase(): { base: string; usedFallback: boolean } {
+  const envBase =
+    (import.meta as any)?.env?.VITE_API_BASE ||
+    (typeof window !== "undefined" && (window as any).__API_BASE__) ||
+    "";
+  const trimmed = String(envBase || "").trim().replace(/\/+$/, "");
+  if (trimmed) return { base: trimmed, usedFallback: false };
+
+  const isDev =
+    typeof window !== "undefined" &&
+    /localhost|127\.0\.0\.1/.test(window.location.hostname);
+
+  const fallback = isDev
+    ? "http://localhost:4000"
+    : "https://fst-api.onrender.com";
+
+  return { base: fallback, usedFallback: true };
+}
+const { base: API_BASE, usedFallback: USED_FALLBACK } = resolveApiBase();
 
 /** Small utils */
 const toBytes = (s: string) => new TextEncoder().encode(s);
@@ -44,6 +67,7 @@ declare global {
   interface Window {
     solana?: PhantomProvider & { isPhantom?: boolean };
     phantom?: { solana?: PhantomProvider };
+    __API_BASE__?: string;
   }
 }
 
@@ -107,7 +131,7 @@ export default function SolanaSignIn({ onSignedIn }: { onSignedIn?: () => void }
     };
   }, [phantom]);
 
-  /** Connect button */
+  /** Connect */
   const connect = useCallback(async () => {
     if (!phantom || !phantom.connect) {
       setState({
@@ -136,10 +160,9 @@ export default function SolanaSignIn({ onSignedIn }: { onSignedIn?: () => void }
     }
   }, [phantom]);
 
-  /** Main sign-in */
+  /** Sign-in */
   const signIn = useCallback(async () => {
     try {
-      if (!API_BASE) throw new Error("VITE_API_BASE is not configured.");
       const wallet = addr || (await (async () => {
         const res = await phantom!.connect?.({ onlyIfTrusted: false });
         const pk: any = res?.publicKey;
@@ -157,7 +180,7 @@ export default function SolanaSignIn({ onSignedIn }: { onSignedIn?: () => void }
       if (!r.ok) {
         throw {
           message: `Nonce request failed (${r.status})`,
-          hint: "Ensure API CORS allows your Vercel domain and cookies are SameSite=None; Secure.",
+          hint: "Ensure API CORS allows your domain and cookies are SameSite=None; Secure.",
         };
       }
       const j = await r.json();
@@ -206,7 +229,7 @@ export default function SolanaSignIn({ onSignedIn }: { onSignedIn?: () => void }
     }
   }, [addr, phantom, onSignedIn]);
 
-  /** Disconnect button */
+  /** Disconnect */
   const disconnect = useCallback(async () => {
     try {
       await phantom?.disconnect?.();
@@ -236,6 +259,14 @@ export default function SolanaSignIn({ onSignedIn }: { onSignedIn?: () => void }
             <h1>Sign in with Solana</h1>
             <p>Professional, secure sign-in with your Phantom wallet.</p>
           </div>
+        </div>
+
+        {/* Info about API base in dev/prod */}
+        <div className="tiny">
+          API: <code>{API_BASE}</code>
+          {USED_FALLBACK && (
+            <span className="hint"> (fallback in use; set VITE_API_BASE to override)</span>
+          )}
         </div>
 
         {!phantom && (
@@ -301,7 +332,6 @@ export default function SolanaSignIn({ onSignedIn }: { onSignedIn?: () => void }
 
         <div className="tips">
           <div>Tip: If no popup appears, click the Phantom extension icon.</div>
-          {!API_BASE && <div className="warn">Missing VITE_API_BASE – set it in your Vercel project env.</div>}
         </div>
       </div>
     </div>
@@ -342,6 +372,8 @@ body { margin: 0; background: var(--bg); color: var(--text); font-family: ui-san
   color:#fff; font-weight:900; font-size:20px; }
 .titles h1 { margin:0; font-size:22px; font-weight:900; letter-spacing:.3px; }
 .titles p { margin:2px 0 0; color: var(--muted); }
+.tiny { margin: 6px 0 2px; font-size: 12px; color: var(--muted); }
+.tiny .hint { margin-left: 6px; }
 .pill { display:flex; align-items:center; gap:10px; margin-top: 10px; padding:12px; border-radius:12px;
   border:1px solid var(--stroke); background: rgba(255,255,255,.05); }
 .pill.faded { color: var(--muted); }
