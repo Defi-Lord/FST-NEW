@@ -37,12 +37,12 @@ app.set("trust proxy", 1);
 // Use an 'any' alias to bypass Express v5 TS overload quirks on .use/.options
 const anyApp = app as any;
 
-// Register middleware via the 'any' alias
+// Middleware
 anyApp.use(helmet());
 anyApp.use(express.json());
 anyApp.use(cookieParser());
 
-// ----- Manual CORS (no 'cors' pkg; credential-friendly) -----
+// ----- Manual CORS (avoids express@5 overloads; credential-friendly) -----
 function isAllowedOrigin(origin?: string | null) {
   if (!origin) return true; // allow curl/postman
   if (allowed.includes(origin)) return true;
@@ -202,7 +202,7 @@ app.post("/auth/verify", async (req, res) => {
 
     // Verify signature
     const sig = bs58.decode(signatureBase58);
-    aconst pubkey = bs58.decode(walletAddress);
+    const pubkey = bs58.decode(walletAddress); // <-- fixed 'aconst' typo to 'const'
     const ok = nacl.sign.detached.verify(toBytes(message), sig, pubkey);
     if (!ok) return res.status(401).json({ error: "Invalid signature" });
 
