@@ -1,12 +1,7 @@
 // src/pages/SolanaSignIn.tsx
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
-/** ──────────────────────────────────────────────────────────────────────────────
- * API base
- * Priority: 1) import.meta.env.VITE_API_BASE  2) window.__API_BASE__  3) fallback
- *    - PROD fallback: https://fst-api.onrender.com
- *    - DEV  fallback: http://localhost:4000
- * ────────────────────────────────────────────────────────────────────────────── */
+/** API base resolver: env → window.__API_BASE__ → fallback */
 function resolveApiBase(): { base: string; usedFallback: boolean } {
   const envBase =
     (import.meta as any)?.env?.VITE_API_BASE ||
@@ -19,40 +14,28 @@ function resolveApiBase(): { base: string; usedFallback: boolean } {
     typeof window !== "undefined" &&
     /localhost|127\.0\.0\.1/.test(window.location.hostname);
 
-  const fallback = isDev
-    ? "http://localhost:4000"
-    : "https://fst-api.onrender.com";
-
+  const fallback = isDev ? "http://localhost:4000" : "https://fst-api.onrender.com";
   return { base: fallback, usedFallback: true };
 }
 const { base: API_BASE, usedFallback: USED_FALLBACK } = resolveApiBase();
 
-/** Small utils */
+/** utils */
 const toBytes = (s: string) => new TextEncoder().encode(s);
-function base58Encode(bytes: Uint8Array): string {
-  const ALPHA = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-  if (!bytes.length) return "";
-  let zeros = 0;
-  while (zeros < bytes.length && bytes[zeros] === 0) zeros++;
-  const input = bytes.slice();
-  const digits: number[] = [];
-  for (let i = zeros; i < input.length; i++) {
-    let carry = input[i];
-    for (let j = 0; j < digits.length; j++) {
-      const x = digits[j] * 256 + carry;
-      digits[j] = Math.floor(x / 58);
-      carry = x % 58;
-    }
-    while (carry > 0) {
-      digits.push(carry % 58);
-      carry = Math.floor(carry / 58);
-    }
+
+// robust base64 for Uint8Array (no Buffer, no deps)
+function toBase64(u8: Uint8Array): string {
+  let bin = "";
+  // build in chunks to avoid stack issues on large arrays
+  const CHUNK = 0x8000;
+  for (let i = 0; i < u8.length; i += CHUNK) {
+    const sub = u8.subarray(i, i + CHUNK);
+    bin += String.fromCharCode.apply(null, Array.from(sub) as any);
   }
-  for (let k = 0; k < zeros; k++) digits.push(0);
-  return digits.reverse().map((d) => ALPHA[d]).join("");
+  // btoa expects binary string
+  return btoa(bin);
 }
 
-/** Phantom typings (subset) */
+/** Phantom typings */
 type PhantomPublicKey = { toBase58?: () => string; toString?: () => string };
 type PhantomProvider = {
   isPhantom?: boolean;
@@ -72,24 +55,18 @@ declare global {
   }
 }
 
-/** Provider detection that covers multiple shapes */
+/** Provider detection */
 function usePhantom(): PhantomProvider | undefined {
   return useMemo(() => {
     const w = typeof window !== "undefined" ? (window as any) : undefined;
     if (!w) return undefined;
-
-    // Multi-provider arrays (some wallets inject window.solana.providers)
     const multi = w?.solana?.providers;
     if (multi && typeof multi === "object") {
-      const entries = Object.values(multi) as PhantomProvider[];
-      const phantom = entries.find((p) => p?.isPhantom);
+      const phantom = Object.values(multi as Record<string, PhantomProvider>).find(p => p?.isPhantom);
       if (phantom) return phantom;
     }
-
-    // Standard injection points
     if (w?.solana?.isPhantom) return w.solana as PhantomProvider;
     if (w?.phantom?.solana?.isPhantom) return w.phantom.solana as PhantomProvider;
-
     return undefined;
   }, []);
 }
@@ -110,7 +87,7 @@ export default function SolanaSignIn({ onSignedIn }: { onSignedIn?: () => void }
   const [state, setState] = useState<State>({ kind: "idle" });
   const busy = ["connecting", "gettingNonce", "signing", "verifying"].includes(state.kind);
 
-  /** Wire Phantom events so address updates if user switches accounts */
+  // events
   useEffect(() => {
     if (!phantom?.on) return;
     const onConnect = () => {
@@ -127,14 +104,11 @@ export default function SolanaSignIn({ onSignedIn }: { onSignedIn?: () => void }
     phantom.on("connect", onConnect);
     phantom.on("disconnect", onDisconnect);
     phantom.on("accountChanged", onAccount);
-    return () => {
-      // no off() in older injectors—safe to ignore
-    };
+    return () => {};
   }, [phantom]);
 
-  /** Connect */
   const connect = useCallback(async () => {
-    if (!phantom || !phantom.connect) {
+    if (!phantom?.connect) {
       setState({
         kind: "error",
         message: "Phantom not detected",
@@ -152,7 +126,7 @@ export default function SolanaSignIn({ onSignedIn }: { onSignedIn?: () => void }
       setState({ kind: "idle" });
     } catch (e: any) {
       const msg = e?.message || "Failed to connect Phantom.";
-      const rejected = /User rejected|User rejected the request/i.test(msg);
+      const rejected = /User rejected/i.test(msg);
       setState({
         kind: "error",
         message: rejected ? "Connection cancelled" : msg,
@@ -161,7 +135,6 @@ export default function SolanaSignIn({ onSignedIn }: { onSignedIn?: () => void }
     }
   }, [phantom]);
 
-  /** Sign-in */
   const signIn = useCallback(async () => {
     try {
       const wallet = addr || (await (async () => {
@@ -197,12 +170,18 @@ export default function SolanaSignIn({ onSignedIn }: { onSignedIn?: () => void }
       }
       setState({ kind: "signing" });
       const { signature } = await phantom.signMessage(toBytes(message), "utf8");
-      const signatureBase58 = base58Encode(signature);
+
+      // Sanity: signature should be 64 bytes for ed25519
+      if (!(signature instanceof Uint8Array) || signature.length < 64) {
+        console.warn("Unexpected signature shape/length:", signature);
+      }
+
+      // ✅ Send Base64 (server accepts 'signature' as Base64)
+      const signatureBase64 = toBase64(signature);
 
       // 3) Verify (with debug logs)
       setState({ kind: "verifying" });
-      const verifyPayload = { walletAddress: wallet, signatureBase58, message };
-      // Debug: see exactly what we send
+      const verifyPayload = { walletAddress: wallet, signature: signatureBase64, message };
       console.log("[verify payload]", verifyPayload);
 
       const v = await fetch(`${API_BASE}/auth/verify`, {
@@ -213,7 +192,6 @@ export default function SolanaSignIn({ onSignedIn }: { onSignedIn?: () => void }
       });
 
       const bodyText = await v.text().catch(() => "");
-      // Debug: always print status + body
       console.log("[verify response]", v.status, bodyText);
 
       if (!v.ok) {
@@ -228,9 +206,7 @@ export default function SolanaSignIn({ onSignedIn }: { onSignedIn?: () => void }
 
       const out = bodyText ? JSON.parse(bodyText) : {};
       if (out?.token) {
-        try {
-          localStorage.setItem("authToken", out.token);
-        } catch {}
+        try { localStorage.setItem("authToken", out.token); } catch {}
       }
       setState({ kind: "success", userId: out?.userId });
       onSignedIn?.();
@@ -239,21 +215,17 @@ export default function SolanaSignIn({ onSignedIn }: { onSignedIn?: () => void }
     }
   }, [addr, phantom, onSignedIn]);
 
-  /** Disconnect */
   const disconnect = useCallback(async () => {
-    try {
-      await phantom?.disconnect?.();
-    } catch {}
+    try { await phantom?.disconnect?.(); } catch {}
     setAddr("");
     setState({ kind: "idle" });
   }, [phantom]);
 
-  /** Mobile helpers */
+  // mobile helpers
   const here = typeof window !== "undefined" ? window.location.origin : "";
   const mobilePhantomDeepLink = `phantom://browse/${encodeURIComponent(here)}`;
   const mobilePhantomUniversal = `https://phantom.app/ul/browse/${encodeURIComponent(here)}`;
 
-  /** Render */
   return (
     <div className="wrap">
       <style>{styles}</style>
@@ -271,12 +243,9 @@ export default function SolanaSignIn({ onSignedIn }: { onSignedIn?: () => void }
           </div>
         </div>
 
-        {/* Info about API base in dev/prod */}
         <div className="tiny">
           API: <code>{API_BASE}</code>
-          {USED_FALLBACK && (
-            <span className="hint"> (fallback in use; set VITE_API_BASE to override)</span>
-          )}
+          {USED_FALLBACK && <span className="hint"> (fallback in use; set VITE_API_BASE to override)</span>}
         </div>
 
         {!phantom && (
@@ -348,7 +317,7 @@ export default function SolanaSignIn({ onSignedIn }: { onSignedIn?: () => void }
   );
 }
 
-/** Styles: elegant neon-glass look */
+/** Styles — neon glass look */
 const styles = String.raw`
 :root {
   --bg: #070a13;
