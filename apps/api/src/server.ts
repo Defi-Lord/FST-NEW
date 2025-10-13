@@ -1,8 +1,7 @@
 // apps/api/src/server.ts
 import express from "express";
-import type { CookieOptions, RequestHandler } from "express";
+import type { CookieOptions } from "express";
 import helmet from "helmet";
-import cors from "cors";
 import cookieParser from "cookie-parser";
 import jwt from "jsonwebtoken";
 import bs58 from "bs58";
@@ -38,31 +37,31 @@ app.use(helmet());
 app.use(express.json());
 app.use(cookieParser());
 
-// ----- CORS -----
+// ----- Manual CORS (no 'cors' package; avoids express@5 TS overloads) -----
 function isAllowedOrigin(origin?: string | null) {
   if (!origin) return true; // allow curl/postman
   if (allowed.includes(origin)) return true;
   try {
     const u = new URL(origin);
-    if (u.hostname.endsWith(".vercel.app")) return true; // allow Vercel previews
+    if (u.hostname.endsWith(".vercel.app")) return true; // allow all vercel previews
   } catch {}
   return false;
 }
 
-// Wrap cors() and register as plain handlers (cast away Express v5 overload noise)
-const corsMiddleware: RequestHandler = cors({
-  origin: (origin, cb) => cb(null, isAllowedOrigin(origin)),
-  credentials: true,
-  methods: ["GET", "POST", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-  optionsSuccessStatus: 204,
-}) as unknown as RequestHandler;
-
-// ⬇️ TypeScript workaround for Express v5 overloads
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-(app as any).options("*", corsMiddleware);
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-(app as any).use(corsMiddleware);
+app.use((req, res, next) => {
+  const origin = req.headers.origin as string | undefined;
+  if (isAllowedOrigin(origin)) {
+    // reflect allowed origin (required for credentialed requests)
+    if (origin) res.header("Access-Control-Allow-Origin", origin);
+    else res.header("Access-Control-Allow-Origin", "*"); // non-browser clients
+    res.header("Vary", "Origin");
+    res.header("Access-Control-Allow-Credentials", "true");
+    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  }
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
 
 // ---------- Helpers ----------
 type NonceCookiePayload = {
@@ -137,6 +136,10 @@ app.get("/public/debug/cors", (req, res) => {
 });
 
 // ---------- Auth ----------
+/**
+ * GET /auth/nonce?wallet=<base58>
+ * Returns the exact message to sign + sets an HttpOnly "nonce" cookie (JWT, 5m)
+ */
 app.get("/auth/nonce", async (req, res) => {
   try {
     const wallet = String(req.query.wallet || "").trim();
@@ -161,6 +164,12 @@ app.get("/auth/nonce", async (req, res) => {
   }
 });
 
+/**
+ * POST /auth/verify
+ * Body: { walletAddress: string, signatureBase58: string, message?: string }
+ * Verifies signature over the EXACT message from /auth/nonce (or body fallback).
+ * Upserts User + Wallet, creates a Session, returns a 30-day JWT.
+ */
 app.post("/auth/verify", async (req, res) => {
   try {
     const { walletAddress, signatureBase58, message: bodyMessage } = req.body ?? {};
@@ -168,6 +177,7 @@ app.post("/auth/verify", async (req, res) => {
       return res.status(400).json({ error: "walletAddress and signatureBase58 are required" });
     }
 
+    // Prefer cookie message; accept body fallback if cookie missing/expired
     const nonceCookie = req.cookies?.nonce;
     let messageFromCookie: string | null = null;
 
@@ -185,12 +195,13 @@ app.post("/auth/verify", async (req, res) => {
     const message = messageFromCookie ?? bodyMessage;
     if (!message) return res.status(400).json({ error: "Missing nonce message" });
 
+    // Verify signature
     const sig = bs58.decode(signatureBase58);
     const pubkey = bs58.decode(walletAddress);
     const ok = nacl.sign.detached.verify(toBytes(message), sig, pubkey);
     if (!ok) return res.status(401).json({ error: "Invalid signature" });
 
-    // Prisma models (cast for TS safety if schema names differ)
+    // Prisma models (cast for TS-safety if schema names differ)
     const db: any = prisma;
 
     const existingWallet = await db.wallet?.findFirst?.({
