@@ -1,5 +1,5 @@
 // apps/api/src/server.ts
-import express, { type CookieOptions } from "express";
+import express, { type CookieOptions, type Request, type Response, type NextFunction } from "express";
 import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import jwt from "jsonwebtoken";
@@ -14,7 +14,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "";
 const NODE_ENV = process.env.NODE_ENV || "development";
 const IS_PROD = NODE_ENV === "production";
 const FORCE_SECURE_COOKIES = process.env.FORCE_SECURE_COOKIES === "1";
-const USE_DB = process.env.USE_DB === "1"; // ← enable later if you want Prisma writes
+const USE_DB = process.env.USE_DB === "1"; // enable later if you want Prisma writes
 const PORT = Number(process.env.PORT) || 4000;
 
 if (!JWT_SECRET) {
@@ -22,14 +22,28 @@ if (!JWT_SECRET) {
   process.exit(1);
 }
 
-// Prisma is optional now
-let prisma: any = null;
-if (USE_DB) {
+// Prisma is optional and lazily loaded (no top-level await)
+type PrismaClientT = {
+  user?: { create?: Function };
+  wallet?: { findFirst?: Function; create?: Function };
+  session?: { create?: Function };
+};
+let prisma: PrismaClientT | null = null;
+let prismaTried = false;
+async function ensurePrisma(): Promise<PrismaClientT | null> {
+  if (!USE_DB) return null;
+  if (prisma) return prisma;
+  if (prismaTried) return null;
+  prismaTried = true;
   try {
-    const { PrismaClient } = await import("@prisma/client");
-    prisma = new PrismaClient();
-  } catch (e) {
-    console.error("[auth] Failed to init Prisma; continuing without DB:", (e as any)?.message || e);
+    // dynamic import inside a function avoids top-level await
+    const mod = await import("@prisma/client");
+    const client = new mod.PrismaClient();
+    prisma = client as unknown as PrismaClientT;
+    return prisma;
+  } catch (e: any) {
+    console.error("[auth] Failed to init Prisma; continuing without DB:", e?.message || e);
+    return null;
   }
 }
 
@@ -59,7 +73,7 @@ function isAllowedOrigin(origin?: string | null) {
   } catch {}
   return false;
 }
-anyApp.use((req, res, next) => {
+anyApp.use((req: Request, res: Response, next: NextFunction) => {
   const origin = req.headers.origin as string | undefined;
   if (isAllowedOrigin(origin)) {
     res.header("Access-Control-Allow-Origin", origin || "*");
@@ -85,13 +99,13 @@ type NonceCookiePayload = {
 const enc = new TextEncoder();
 const toBytes = (s: string) => enc.encode(s);
 
-function isRequestSecure(req: express.Request) {
+function isRequestSecure(req: Request) {
   const xfProto = String(req.headers["x-forwarded-proto"] || "");
   return FORCE_SECURE_COOKIES || IS_PROD || xfProto.includes("https");
 }
 function setCookie(
-  req: express.Request,
-  res: express.Response,
+  req: Request,
+  res: Response,
   name: string,
   value: string,
   maxAgeMs: number,
@@ -107,7 +121,7 @@ function setCookie(
   };
   res.cookie(name, value as any, base);
 }
-function clearCookie(req: express.Request, res: express.Response, name: string) {
+function clearCookie(req: Request, res: Response, name: string) {
   const opts: CookieOptions = {
     httpOnly: true,
     sameSite: "none",
@@ -143,7 +157,7 @@ app.get("/public/debug/cors", (req, res) => {
 });
 
 // ─────────────── Auth ───────────────
-app.get("/auth/nonce", async (req, res) => {
+app.get("/auth/nonce", async (req: Request, res: Response) => {
   try {
     const wallet = String(req.query.wallet || "").trim();
     if (!wallet) return res.status(400).json({ error: "Missing wallet param" });
@@ -161,14 +175,13 @@ app.get("/auth/nonce", async (req, res) => {
     setCookie(req, res, "nonce", token, 5 * 60 * 1000);
 
     return res.json({ wallet, nonce, message, expiresInSec: 300 });
-  } catch (err) {
-    console.error("[nonce] error:", (err as any)?.message || err);
+  } catch (err: any) {
+    console.error("[nonce] error:", err?.message || err);
     return res.status(500).json({ error: "Internal error" });
   }
 });
 
-app.post("/auth/verify", async (req, res) => {
-  const tag = `[verify ${new Date().toISOString()}]`;
+app.post("/auth/verify", async (req: Request, res: Response) => {
   try {
     // Normalize body even if text/plain
     const raw = req.body as any;
@@ -188,7 +201,7 @@ app.post("/auth/verify", async (req, res) => {
     if (!walletAddress) return res.status(400).json({ error: "walletAddress is required" });
 
     // Prefer message from cookie; fall back to body
-    const nonceCookie = req.cookies?.nonce;
+    const nonceCookie = (req as any).cookies?.nonce;
     let message = bodyMessage ?? null;
     if (nonceCookie) {
       try {
@@ -236,31 +249,33 @@ app.post("/auth/verify", async (req, res) => {
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
     let db: "skipped" | "ok" | "error" = "skipped";
-    if (USE_DB && prisma) {
-      try {
-        // Upsert-ish, schema-agnostic (adjust if your schema differs)
-        const w = await prisma.wallet?.findFirst?.({
-          where: { address: walletAddress },
-          select: { id: true, userId: true },
-        });
-        let uid = userId;
-        let wid = walletId;
-        if (w) {
-          uid = w.userId;
-          wid = w.id;
-        } else {
-          await prisma.user?.create?.({
-            data: { id: uid, createdAt: new Date(), updatedAt: new Date(), displayName: null },
+    if (USE_DB) {
+      const client = await ensurePrisma();
+      if (client) {
+        try {
+          const w = await client.wallet?.findFirst?.({
+            where: { address: walletAddress },
+            select: { id: true, userId: true },
           });
-          await prisma.wallet?.create?.({
-            data: { id: wid, address: walletAddress, chain: "solana", userId: uid },
-          });
+          let uid = userId;
+          let wid = walletId;
+          if (w) {
+            uid = w.userId;
+            wid = w.id;
+          } else {
+            await client.user?.create?.({
+              data: { id: uid, createdAt: new Date(), updatedAt: new Date(), displayName: null },
+            });
+            await client.wallet?.create?.({
+              data: { id: wid, address: walletAddress, chain: "solana", userId: uid },
+            });
+          }
+          await client.session?.create?.({ data: { id: randomUUID(), userId: uid, jwtId: jti, expiresAt } });
+          db = "ok";
+        } catch (e: any) {
+          console.error("[verify] DB write failed:", e?.message || e);
+          db = "error";
         }
-        await prisma.session?.create?.({ data: { id: randomUUID(), userId: uid, jwtId: jti, expiresAt } });
-        db = "ok";
-      } catch (e) {
-        console.error(tag, "DB write failed:", (e as any)?.message || e);
-        db = "error";
       }
     }
 
@@ -276,8 +291,8 @@ app.post("/auth/verify", async (req, res) => {
       db,
       expiresAt: expiresAt.toISOString(),
     });
-  } catch (err) {
-    console.error("[verify] error:", (err as any)?.message || err);
+  } catch (err: any) {
+    console.error("[verify] error:", err?.message || err);
     return res.status(500).json({ error: "Internal error" });
   }
 });
