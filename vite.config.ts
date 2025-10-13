@@ -1,46 +1,26 @@
 // vite.config.ts
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
-import { nodePolyfills } from 'vite-plugin-node-polyfills';
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import nodePolyfills from 'vite-plugin-node-polyfills'
 
-// Vite 5 + browser build: add polyfills for Node core modules used by Solana/WC deps.
 export default defineConfig({
   plugins: [
     react(),
     nodePolyfills({
-      // also polyfill imports like `node:crypto`
-      protocolImports: true,
-      include: ['buffer', 'process', 'util', 'events', 'stream', 'path', 'crypto'],
+      protocolImports: true,   // lets you import node:crypto, etc.
+      // include: ['buffer','process'] // not necessary, but you can be explicit
     }),
   ],
-
-  resolve: {
-    alias: {
-      // Ensure Node core modules used by deps resolve to browser equivalents
-      crypto: 'crypto-browserify',
-      stream: 'stream-browserify',
-      buffer: 'buffer',
-      process: 'process/browser',
-    },
-  },
-
   define: {
-    // provide globals expected by some libs
+    // some libs check these
+    'process.env': {},
     global: 'globalThis',
-    'process.env': {}, // keep empty object to avoid undefined errors
   },
-
-  optimizeDeps: {
-    esbuildOptions: {
-      // Some packages assume `global` exists
-      define: {
-        global: 'globalThis',
-      },
-    },
-  },
-
   build: {
-    // in case some CJS slips in; helps mixed ESM/CJS libraries
-    commonjsOptions: { transformMixedEsModules: true },
+    target: 'es2020',
   },
-});
+  optimizeDeps: {
+    // helps Vite prebundle Buffer/Process when needed
+    include: ['buffer', 'process'],
+  },
+})
