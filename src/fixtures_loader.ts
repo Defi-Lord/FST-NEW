@@ -1,42 +1,64 @@
-// src/players_loader.ts
-// Tries: VITE_FPL_PROXY_URL -> /api/fpl/bootstrap-static -> /mock/bootstrap-static.json.
+// src/fixtures_loader.ts
+// Loads real fixtures from FPL via your Vite proxy (/fpl/api/*) with a mock fallback.
+// Honors VITE_FPL_PROXY_URL (full base) or VITE_USE_MOCK=1.
+
 type Bootstrap = any
+type FplFixture = any
 
-const DEV_URL = '/api/fpl/bootstrap-static'
-const LOCAL_SNAPSHOT_URL = '/mock/bootstrap-static.json'
+const envUrl = import.meta.env.VITE_FPL_PROXY_URL as string | undefined
+const USE_MOCK = import.meta.env.VITE_USE_MOCK === '1'
 
-const envUrl = (import.meta as any).env?.VITE_FPL_PROXY_URL as string | undefined
-const USE_MOCK = (import.meta as any).env?.VITE_USE_MOCK === '1'
+// If VITE_FPL_PROXY_URL is given (e.g. http://localhost:3300/fpl/bootstrap-static),
+// derive its base by removing trailing slashes and "/bootstrap-static".
+function deriveBase(url?: string) {
+  if (!url) return null
+  return url.replace(/\/+$/, '').replace(/\/bootstrap-static$/, '')
+}
 
-async function fetchJSON<T>(url: string): Promise<T | null> {
+const derived = deriveBase(envUrl)
+const BASE = derived ?? '/fpl/api'   // <— default to Vite proxy base
+
+async function fetchJSON<T>(url: string, ms = 15000): Promise<T> {
+  const ctrl = new AbortController()
+  const t = setTimeout(() => ctrl.abort(), ms)
   try {
-    const r = await fetch(url, { cache: 'no-store' })
-    if (!r.ok) return null
+    const r = await fetch(url, { signal: ctrl.signal, cache: 'no-store' })
+    if (!r.ok) throw new Error(`${url} failed (${r.status})`)
     return (await r.json()) as T
-  } catch {
+  } finally {
+    clearTimeout(t)
+  }
+}
+
+export async function loadBootstrap(): Promise<Bootstrap | null> {
+  const url = USE_MOCK ? '/mock/bootstrap-static.json' : `${BASE}/bootstrap-static`
+  try {
+    return await fetchJSON<Bootstrap>(url)
+  } catch (e) {
+    console.warn('[Fixtures] bootstrap-static fetch failed:', e)
     return null
   }
 }
 
-export async function loadPlayersLoader(): Promise<Bootstrap | null> {
-  // 1) env override
-  if (envUrl) {
-    const u = envUrl.replace(/\/+$/, '')
-    const data = await fetchJSON<Bootstrap>(u)
-    if (data) return data
+export async function loadFixtures(): Promise<FplFixture[] | null> {
+  const url = USE_MOCK ? '/mock/fixtures.json' : `${BASE}/fixtures`
+  try {
+    const fixtures = await fetchJSON<FplFixture[]>(url)
+    if (!Array.isArray(fixtures) || !fixtures.length) {
+      console.warn('[Fixtures] fixtures fetch failed or empty')
+      return null
+    }
+    return fixtures
+  } catch (e) {
+    console.warn('[Fixtures] fixtures fetch failed:', e)
+    return null
   }
-  // 2) edge proxy (unless forced mock)
-  if (!USE_MOCK) {
-    const data = await fetchJSON<Bootstrap>(DEV_URL)
-    if (data) return data
-  }
-  // 3) local snapshot fallback
-  const local = await fetchJSON<Bootstrap>(LOCAL_SNAPSHOT_URL)
-  if (local) return local
-
-  console.warn('[players_loader] Could not load bootstrap-static from any source.')
-  return null
 }
 
-// backward compat for old filename `players_loder.ts`
-export { loadPlayersLoader as loadPlayersLoder }
+/** Optional: N upcoming fixtures (thin wrapper you already referenced) */
+export async function loadUpcomingFixtures(limit = 10): Promise<FplFixture[] | null> {
+  const all = await loadFixtures()
+  if (!all) return null
+  // If you need to filter or sort, do it here. For now, just slice.
+  return all.slice(0, limit)
+}
