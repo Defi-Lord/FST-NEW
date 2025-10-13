@@ -1,4 +1,3 @@
-// apps/api/src/server.ts
 import express from "express";
 import type { CookieOptions } from "express";
 import helmet from "helmet";
@@ -34,21 +33,26 @@ const PORT = Number(process.env.PORT) || 4000;
 const app = express();
 app.set("trust proxy", 1);
 
-// Use an 'any' alias to bypass Express v5 TS overload quirks on .use/.options
+// Use 'any' to avoid express@5 TS overload complaints
 const anyApp = app as any;
 
-// Middleware
+// Middleware (order matters)
 anyApp.use(helmet());
-anyApp.use(express.json());
+
+// Accept JSON as application/json OR text/plain (some clients send plain text JSON)
+anyApp.use(express.json({ type: ["application/json", "text/plain"] }));
+// Also accept classic forms
+anyApp.use(express.urlencoded({ extended: true }));
+
 anyApp.use(cookieParser());
 
-// ----- Manual CORS (avoids express@5 overloads; credential-friendly) -----
+// --------- Manual CORS (credential-friendly) ----------
 function isAllowedOrigin(origin?: string | null) {
   if (!origin) return true; // allow curl/postman
   if (allowed.includes(origin)) return true;
   try {
     const u = new URL(origin);
-    if (u.hostname.endsWith(".vercel.app")) return true; // allow all Vercel previews
+    if (u.hostname.endsWith(".vercel.app")) return true;
   } catch {}
   return false;
 }
@@ -56,9 +60,8 @@ function isAllowedOrigin(origin?: string | null) {
 anyApp.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
   const origin = req.headers.origin as string | undefined;
   if (isAllowedOrigin(origin)) {
-    // reflect allowed origin (required for credentialed requests)
     if (origin) res.header("Access-Control-Allow-Origin", origin);
-    else res.header("Access-Control-Allow-Origin", "*"); // non-browser clients
+    else res.header("Access-Control-Allow-Origin", "*");
     res.header("Vary", "Origin");
     res.header("Access-Control-Allow-Credentials", "true");
     res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -143,7 +146,6 @@ app.get("/public/debug/cors", (req, res) => {
 // ---------- Auth ----------
 /**
  * GET /auth/nonce?wallet=<base58>
- * Returns the exact message to sign + sets an HttpOnly "nonce" cookie (JWT, 5m)
  */
 app.get("/auth/nonce", async (req, res) => {
   try {
@@ -171,42 +173,100 @@ app.get("/auth/nonce", async (req, res) => {
 
 /**
  * POST /auth/verify
- * Body: { walletAddress: string, signatureBase58: string, message?: string }
- * Verifies signature over the EXACT message from /auth/nonce (or body fallback).
- * Upserts User + Wallet, creates a Session, returns a 30-day JWT.
+ * Accepts:
+ *   JSON body (application/json or text/plain JSON),
+ *   URL-encoded form body,
+ *   or query params as a last resort.
+ * Fields (any alias accepted):
+ *   walletAddress | address | wallet
+ *   signatureBase58 | signature | sig
+ *   message (required if nonce cookie not available)
  */
 app.post("/auth/verify", async (req, res) => {
   try {
-    const { walletAddress, signatureBase58, message: bodyMessage } = req.body ?? {};
-    if (!walletAddress || !signatureBase58) {
-      return res.status(400).json({ error: "walletAddress and signatureBase58 are required" });
+    const rawBody = req.body as any;
+
+    // If body came in as a string (e.g., text/plain), try to parse JSON
+    let body: any = rawBody;
+    if (typeof rawBody === "string") {
+      try {
+        body = JSON.parse(rawBody);
+      } catch {
+        body = {};
+      }
     }
 
-    // Prefer cookie message; accept body fallback if cookie missing/expired
+    // Pull from body OR query as fallback
+    const q = req.query || {};
+    const walletAddress: string =
+      (body.walletAddress || body.address || body.wallet || q.walletAddress || q.address || q.wallet || "").toString().trim();
+    const signatureStr: string =
+      (body.signatureBase58 || body.signature || body.sig || q.signatureBase58 || q.signature || q.sig || "").toString().trim();
+    const bodyMessage: string | undefined = (body.message || q.message) ? String(body.message || q.message) : undefined;
+
+    if (!walletAddress) {
+      return res.status(400).json({ error: "walletAddress is required" });
+    }
+    if (!signatureStr) {
+      return res.status(400).json({ error: "signatureBase58 is required" });
+    }
+
+    // Prefer nonce cookie message; accept body fallback
     const nonceCookie = req.cookies?.nonce;
     let messageFromCookie: string | null = null;
-
     if (nonceCookie) {
       try {
         const nonceData: any = jwt.verify(nonceCookie, JWT_SECRET);
-        if (nonceData.t !== "nonce") return res.status(400).json({ error: "Bad nonce payload" });
-        if (nonceData.wallet !== walletAddress) {
+        if (nonceData.t !== "nonce") {
+          return res.status(400).json({ error: "Bad nonce payload" });
+        }
+        if (String(nonceData.wallet) !== walletAddress) {
           return res.status(400).json({ error: "Wallet mismatch with nonce" });
         }
-        messageFromCookie = nonceData.msg;
-      } catch {}
+        messageFromCookie = String(nonceData.msg || "");
+      } catch {
+        // ignore; fallback to body message
+      }
     }
 
     const message = messageFromCookie ?? bodyMessage;
-    if (!message) return res.status(400).json({ error: "Missing nonce message" });
+    if (!message) {
+      return res.status(400).json({
+        error: "Missing nonce message",
+        hint: "Call GET /auth/nonce first (with credentials), then send the exact 'message' to /auth/verify.",
+      });
+    }
+
+    // Decode signature (try base58 then base64)
+    let sig: Uint8Array | null = null;
+    try {
+      sig = bs58.decode(signatureStr);
+    } catch {
+      try {
+        sig = new Uint8Array(Buffer.from(signatureStr, "base64"));
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!sig) {
+      return res.status(400).json({
+        error: "Bad signature encoding",
+        hint: "Provide signatureBase58 (preferred) or Base64 in 'signature'.",
+      });
+    }
 
     // Verify signature
-    const sig = bs58.decode(signatureBase58);
-    const pubkey = bs58.decode(walletAddress); // <-- fixed 'aconst' typo to 'const'
+    let pubkey: Uint8Array;
+    try {
+      pubkey = bs58.decode(walletAddress);
+    } catch {
+      return res.status(400).json({ error: "walletAddress must be base58" });
+    }
+
     const ok = nacl.sign.detached.verify(toBytes(message), sig, pubkey);
     if (!ok) return res.status(401).json({ error: "Invalid signature" });
 
-    // Prisma models (cast for TS-safety if schema names differ)
+    // ----- Upsert user + wallet -----
     const db: any = prisma;
 
     const existingWallet = await db.wallet?.findFirst?.({
@@ -243,6 +303,7 @@ app.post("/auth/verify", async (req, res) => {
       });
     }
 
+    // Create a 30-day auth JWT + Session
     const jti = randomUUID();
     const authToken = jwt.sign({ sub: userId, wid: walletId, t: "auth" }, JWT_SECRET, {
       expiresIn: "30d",
@@ -251,42 +312,20 @@ app.post("/auth/verify", async (req, res) => {
 
     const sessionId = randomUUID();
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-
     await db.session?.create?.({ data: { id: sessionId, userId, jwtId: jti, expiresAt } });
 
     clearCookie(req, res, "nonce");
     setCookie(req, res, "auth", authToken, 30 * 24 * 60 * 60 * 1000);
 
-    return res.json({ ok: true, token: authToken, userId, walletId, expiresAt: expiresAt.toISOString() });
+    return res.json({
+      ok: true,
+      token: authToken,
+      userId,
+      walletId,
+      expiresAt: expiresAt.toISOString(),
+    });
   } catch (err) {
     console.error("verify error", err);
-    return res.status(500).json({ error: "Internal error" });
-  }
-});
-
-// Example protected route
-app.get("/me", async (req, res) => {
-  try {
-    const auth = req.headers.authorization || "";
-    const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
-    if (!token) return res.status(401).json({ error: "Missing token" });
-
-    let payload: any;
-    try {
-      payload = jwt.verify(token, JWT_SECRET);
-    } catch {
-      return res.status(401).json({ error: "Invalid token" });
-    }
-    if (payload.t !== "auth") return res.status(401).json({ error: "Bad token type" });
-
-    const db: any = prisma;
-    const user = await db.user.findUnique({
-      where: { id: payload.sub },
-      select: { id: true, displayName: true, createdAt: true, updatedAt: true },
-    });
-    return res.json({ user });
-  } catch (err) {
-    console.error("me error", err);
     return res.status(500).json({ error: "Internal error" });
   }
 });
