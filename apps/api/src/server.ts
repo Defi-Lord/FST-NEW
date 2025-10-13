@@ -33,22 +33,27 @@ const PORT = Number(process.env.PORT) || 4000;
 // ---------- App ----------
 const app = express();
 app.set("trust proxy", 1);
-app.use(helmet());
-app.use(express.json());
-app.use(cookieParser());
 
-// ----- Manual CORS (no 'cors' package; avoids express@5 TS overloads) -----
+// Use an 'any' alias to bypass Express v5 TS overload quirks on .use/.options
+const anyApp = app as any;
+
+// Register middleware via the 'any' alias
+anyApp.use(helmet());
+anyApp.use(express.json());
+anyApp.use(cookieParser());
+
+// ----- Manual CORS (no 'cors' pkg; credential-friendly) -----
 function isAllowedOrigin(origin?: string | null) {
   if (!origin) return true; // allow curl/postman
   if (allowed.includes(origin)) return true;
   try {
     const u = new URL(origin);
-    if (u.hostname.endsWith(".vercel.app")) return true; // allow all vercel previews
+    if (u.hostname.endsWith(".vercel.app")) return true; // allow all Vercel previews
   } catch {}
   return false;
 }
 
-app.use((req, res, next) => {
+anyApp.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
   const origin = req.headers.origin as string | undefined;
   if (isAllowedOrigin(origin)) {
     // reflect allowed origin (required for credentialed requests)
@@ -197,7 +202,7 @@ app.post("/auth/verify", async (req, res) => {
 
     // Verify signature
     const sig = bs58.decode(signatureBase58);
-    const pubkey = bs58.decode(walletAddress);
+    aconst pubkey = bs58.decode(walletAddress);
     const ok = nacl.sign.detached.verify(toBytes(message), sig, pubkey);
     if (!ok) return res.status(401).json({ error: "Invalid signature" });
 
