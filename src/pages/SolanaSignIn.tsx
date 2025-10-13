@@ -1,3 +1,4 @@
+// src/pages/SolanaSignIn.tsx
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 /** ──────────────────────────────────────────────────────────────────────────────
@@ -198,25 +199,34 @@ export default function SolanaSignIn({ onSignedIn }: { onSignedIn?: () => void }
       const { signature } = await phantom.signMessage(toBytes(message), "utf8");
       const signatureBase58 = base58Encode(signature);
 
-      // 3) Verify
+      // 3) Verify (with debug logs)
       setState({ kind: "verifying" });
+      const verifyPayload = { walletAddress: wallet, signatureBase58, message };
+      // Debug: see exactly what we send
+      console.log("[verify payload]", verifyPayload);
+
       const v = await fetch(`${API_BASE}/auth/verify`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ walletAddress: wallet, signatureBase58, message }),
+        body: JSON.stringify(verifyPayload),
       });
+
+      const bodyText = await v.text().catch(() => "");
+      // Debug: always print status + body
+      console.log("[verify response]", v.status, bodyText);
+
       if (!v.ok) {
-        const txt = await v.text().catch(() => "");
         throw {
-          message: `Verify failed (${v.status})${txt ? `: ${txt}` : ""}`,
+          message: `Verify failed (${v.status})${bodyText ? `: ${bodyText}` : ""}`,
           hint:
             v.status === 400
-              ? "Nonce/message mismatch. Open DevTools → Network and inspect /auth/nonce + /auth/verify."
+              ? "Nonce/message/signature issue. Check the payload printed above."
               : "Server error. Check API logs.",
         };
       }
-      const out = await v.json();
+
+      const out = bodyText ? JSON.parse(bodyText) : {};
       if (out?.token) {
         try {
           localStorage.setItem("authToken", out.token);
@@ -389,7 +399,7 @@ body { margin: 0; background: var(--bg); color: var(--text); font-family: ui-san
 .alert { border-radius:12px; padding:12px; border:1px solid; }
 .alert.error { border-color: rgba(255,60,60,.4); background: rgba(255,0,0,.08); color:#ffdcdc; }
 .alert.ok { border-color: rgba(34,197,94,.4); background: rgba(34,197,94,.10); color:#d8ffe7; }
-.alert.note { border-color: rgba(6,182,212,.4); background: rgba(6,182,212,.10); color:#d1f6ff; }
+.alert.note { border-color: rgba(6,182,212,.4); background: rgba(6,182,212,.10); color: #d1f6ff; }
 .hint { opacity:.85; font-size:12px; margin-top: 6px; }
 .spinner { width: 22px; height: 22px; margin: 6px auto; border-radius: 50%; border: 3px solid rgba(255,255,255,.25); border-top-color: #fff; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(1turn); } }
