@@ -1,91 +1,95 @@
-// src/components/SignInWithWallet.tsx
-import React from 'react';
-import { API_BASE } from '../api'; // <<— FIX: go up one level
+import React, { useCallback, useMemo, useState } from "react";
+import { useWallet } from "@solana/wallet-adapter-react";
+import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import { buildAuthMessage, getNonce, u8ToBase64, verifySignature } from "../lib/api";
 
-export default function SignInWithWallet({ onSignedIn }: { onSignedIn?: () => void }) {
-  const [busy, setBusy] = React.useState(false);
-  const [err, setErr] = React.useState<string | null>(null);
+const box: React.CSSProperties = {
+  maxWidth: 640,
+  margin: "0 auto",
+  padding: 16,
+  border: "1px solid #2a2a2a",
+  background: "#0e0e0e",
+  borderRadius: 12
+};
 
-  const doSign = async () => {
-    setBusy(true); setErr(null);
+const SignInWithWallet: React.FC = () => {
+  const { publicKey, signMessage, connected } = useWallet();
+  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState<string>("");
+  const [serverResp, setServerResp] = useState<any>(null);
+
+  const address = useMemo(() => publicKey?.toBase58() ?? "", [publicKey]);
+
+  const handleSignIn = useCallback(async () => {
+    setStatus("");
+    setServerResp(null);
+
+    if (!connected) return setStatus("Wallet not connected.");
+    if (!publicKey) return setStatus("No public key.");
+    if (!signMessage) return setStatus("Wallet does not support message signing.");
+
     try {
-      const provider: any = (window as any).solana ?? (window as any).phantom?.solana;
-      if (!provider?.isPhantom) throw new Error('Phantom not detected');
+      setLoading(true);
 
-      const connectWithTimeout = (ms: number) =>
-        Promise.race([
-          provider.connect({ onlyIfTrusted: false }),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('Popup timed out')), ms)),
-        ]);
-      const { publicKey } = await connectWithTimeout(20000);
-      const address = publicKey.toString();
+      const nonce = await getNonce(address);
+      const message = buildAuthMessage({ address, nonce });
 
-      const nonceRes = await fetch(`${API_BASE}/auth/nonce?address=${encodeURIComponent(address)}`, { credentials: 'include' });
-      if (!nonceRes.ok) throw new Error('Failed to get nonce');
-      const { nonce } = await nonceRes.json();
+      const bytes = new TextEncoder().encode(message);
+      const sigU8 = await signMessage(bytes);
+      const signatureBase64 = u8ToBase64(sigU8);
 
-      if (!provider.signMessage) throw new Error('Wallet cannot sign messages');
-      const { signature } = await provider.signMessage(new TextEncoder().encode(nonce), 'utf8');
-      const sigB64 = btoa(String.fromCharCode(...Array.from(signature)));
+      const verified = await verifySignature({ address, message, signature: signatureBase64 });
 
-      const verifyRes = await fetch(`${API_BASE}/auth/verify`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ address, nonce, signatureBase64: sigB64 }),
-      });
-      const verifyTxt = await verifyRes.text();
-      if (!verifyRes.ok) throw new Error(verifyTxt);
-      const { token } = JSON.parse(verifyTxt);
-
-      localStorage.setItem('auth_token', token);
-      onSignedIn?.();
-    } catch (e: any) {
-      setErr(String(e?.message || e));
+      setServerResp(verified);
+      setStatus(verified?.ok ? "Signed in successfully ✅" : "Verify returned not-ok ❓");
+    } catch (err: any) {
+      const body = err?.body ? ` | body: ${typeof err.body === "string" ? err.body : JSON.stringify(err.body)}` : "";
+      setStatus(`Sign-in failed: ${err?.message ?? String(err)}${body}`);
     } finally {
-      setBusy(false);
+      setLoading(false);
     }
-  };
+  }, [address, connected, publicKey, signMessage]);
 
   return (
-    <div className="signin-wrap">
-      <style>{css}</style>
-      <div className="card">
-        <div className="logo">FST</div>
-        <h1>Sign in to FST</h1>
-        <p className="sub">Connect your Phantom wallet to continue.</p>
+    <div style={box}>
+      <h2 style={{ marginTop: 0 }}>Sign in with Wallet</h2>
 
-        <button className="btn" onClick={doSign} disabled={busy}>
-          {busy ? 'Signing…' : 'Sign in with Phantom'}
-        </button>
-
-        {err && <div className="alert">{err}</div>}
-
-        <div className="muted">Make sure Phantom is set to <b>Mainnet</b>.</div>
+      <div style={{ marginBottom: 12 }}>
+        <WalletMultiButton />
       </div>
-      <div className="bg" />
+
+      <div style={{ fontSize: 13, color: "#9aa", marginBottom: 12 }}>
+        Address: {address || "(not connected)"}
+      </div>
+
+      <button
+        disabled={!connected || loading}
+        onClick={handleSignIn}
+        style={{
+          padding: "10px 16px",
+          borderRadius: 8,
+          border: "1px solid #3a3a3a",
+          background: connected ? "#0b5" : "#444",
+          color: "white",
+          cursor: connected && !loading ? "pointer" : "not-allowed"
+        }}
+      >
+        {loading ? "Signing…" : "Sign In"}
+      </button>
+
+      {status && (
+        <pre style={{ whiteSpace: "pre-wrap", marginTop: 16, fontSize: 12, background: "#111", padding: 12, borderRadius: 8 }}>
+{status}
+        </pre>
+      )}
+
+      {serverResp && (
+        <pre style={{ whiteSpace: "pre-wrap", marginTop: 16, fontSize: 12, background: "#111", padding: 12, borderRadius: 8 }}>
+{JSON.stringify(serverResp, null, 2)}
+        </pre>
+      )}
     </div>
   );
-}
+};
 
-const css = String.raw`
-.signin-wrap { min-height:100dvh; display:grid; place-items:center; position:relative; overflow:hidden; }
-.bg { position:absolute; inset:-20%; background:
-  radial-gradient(60% 40% at 20% 10%, rgba(99,102,241,.25), transparent 60%),
-  radial-gradient(50% 40% at 80% 20%, rgba(236,72,153,.25), transparent 60%),
-  radial-gradient(40% 30% at 40% 80%, rgba(16,185,129,.25), transparent 60%);
-  filter: blur(80px);
-}
-.card { position:relative; z-index:1; width: min(92vw, 460px);
-  background:#fff; border:1px solid #eef1f6; border-radius: 16px; padding: 28px;
-  box-shadow: 0 10px 50px rgba(0,0,0,.08);
-  text-align:center;
-}
-.logo { width:56px; height:56px; border-radius:14px; margin: 0 auto 12px; display:grid; place-items:center;
-  background: linear-gradient(135deg, #6366f1, #ec4899); color:#fff; font-weight:900; letter-spacing:.5px; }
-h1 { margin: 6px 0 4px; font-size: 22px; font-weight: 900; }
-.sub { margin: 0 0 16px; opacity:.75; }
-.btn { appearance:none; border:none; background:#111827; color:#fff; padding:12px 14px; border-radius: 12px; cursor:pointer; font-weight:800; width:100%; }
-.alert { border:1px solid #fecaca; background:#fff1f2; color:#991b1b; border-radius: 10px; padding: 10px; margin: 12px 0 0; }
-.muted { margin-top:10px; opacity:.7; font-size: 12px; }
-`;
+export default SignInWithWallet;

@@ -2,38 +2,27 @@
   "name": "fst-main",
   "version": "0.1.0",
   "private": true,
-  "engines": {
-    "node": ">=20 <21"
-  },
   "type": "module",
+  "engines": { "node": ">=20 <21" },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
-    "@solana/spl-token": "^0.4.6",
-    "@solana/wallet-adapter-base": "latest",
+    "@solana/web3.js": "^1.98.4",
     "@solana/wallet-adapter-react": "latest",
     "@solana/wallet-adapter-react-ui": "latest",
     "@solana/wallet-adapter-wallets": "latest",
-    "@solana/web3.js": "1.98.4",
+    "bs58": "^5.0.0",
     "react": "18.3.1",
-    "react-dom": "18.3.1",
-    "buffer": "^6.0.3",
-    "process": "^0.11.10",
-    "util": "^0.12.5",
-    "events": "^3.3.0",
-    "stream-browserify": "^3.0.0"
+    "react-dom": "18.3.1"
   },
   "devDependencies": {
-    "@types/node": "^20.14.10",
-    "@vitejs/plugin-react": "^4.3.4",
-    "typescript": "^5.6.2",
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "typescript": "^5.6.3",
     "vite": "^5.4.20",
-    "vite-plugin-node-polyfills": "^0.21.0"
-  },
-  "overrides": {
-    "@solana/web3.js": "1.98.4"
+    "@vitejs/plugin-react": "^4.3.3"
   }
 }
