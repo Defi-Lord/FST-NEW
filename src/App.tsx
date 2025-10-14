@@ -45,7 +45,7 @@ export default function App() {
   const stackRef = useRef<Route[]>(['landing'])
   const [authed, setAuthed] = useState<boolean>(!!getToken())
   const [isAdmin, setIsAdmin] = useState(false)
-  const [address, setAddress] = useState<string>('')
+  const [wallet, setWallet] = useState<string>('')
 
   useEffect(() => {
     const tg = getTG()
@@ -91,7 +91,7 @@ export default function App() {
     if (s.length > 1) { s.pop(); setRoute(s[s.length - 1]) }
   }
 
-  // token -> check admin flag
+  // Check admin from token (optional)
   useEffect(() => {
     const token = getToken()
     if (!token) { setIsAdmin(false); return }
@@ -114,7 +114,7 @@ export default function App() {
   }, [authed])
 
   const handleSignedIn = (addr: string) => {
-    setAddress(addr)
+    setWallet(addr)
     setAuthed(true)
     go('home')
   }
@@ -124,24 +124,15 @@ export default function App() {
     go('connect')
   }
 
-  const onContestJoined = () => {
-    go('teamSelect')
-  }
-
-  const handleAdminNav = () => {
-    if (!isAdmin) { alert('Admin only'); return }
-    go('admin')
-  }
+  const onContestJoined = () => { go('teamSelect') }
+  const handleAdminNav = () => { if (!isAdmin) { alert('Admin only'); return } go('admin') }
 
   return (
     <>
       {route === 'landing' && <Landing onLaunch={onLaunch} />}
 
       {route === 'connect' && (
-        <div style={{ display: 'grid', gap: 12, padding: 16 }}>
-          <SignInWithWallet onSignedIn={handleSignedIn} />
-          <small>Tip: If you don’t see the wallet popup, click the Phantom icon in your browser toolbar.</small>
-        </div>
+        <SignInWithWallet onSignedIn={handleSignedIn} />
       )}
 
       {route === 'home' && (
