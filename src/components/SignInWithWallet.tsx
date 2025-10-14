@@ -1,12 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { PublicKey } from '@solana/web3.js'
+import { Buffer } from 'buffer'
 
-type Props = {
-  onSignedIn?: (wallet: string) => void
-  className?: string
-}
+/** Make Buffer available (some libs expect it on window) */
+;(window as any).Buffer ??= Buffer
 
-/** Phantom window type */
 type PhantomProvider = {
   isPhantom?: boolean
   publicKey?: PublicKey
@@ -15,6 +13,11 @@ type PhantomProvider = {
   signMessage?: (message: Uint8Array, display?: any) => Promise<{ signature: Uint8Array }>
 }
 
+type Props = {
+  onSignedIn?: (address: string) => void
+}
+
+/** Change this if you deploy your API somewhere else */
 const API_BASE =
   (import.meta as any).env?.VITE_API_BASE ||
   'https://fst-api.onrender.com'
@@ -23,291 +26,315 @@ function getPhantom(): PhantomProvider | undefined {
   return (window as any)?.solana
 }
 
-/** Optional helper: encode Uint8Array to base64 if your API prefers it. */
-function u8ToBase64(u8: Uint8Array): string {
-  let s = ''
-  u8.forEach((b) => (s += String.fromCharCode(b)))
-  return btoa(s)
+/** convert Uint8Array -> base64 string */
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ''
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
+  return btoa(binary)
 }
 
-export default function SignInWithWallet({ onSignedIn, className }: Props) {
-  const [wallet, setWallet] = useState<string>('')
+/** Tries GET ?wallet=, then GET ?address=, then POST body to obtain a nonce */
+async function fetchNonce(address: string): Promise<string> {
+  // 1) try wallet param (your backend’s preferred shape)
+  let r = await fetch(`${API_BASE}/auth/nonce?wallet=${encodeURIComponent(address)}`, {
+    credentials: 'include'
+  })
+  if (r.ok) {
+    const j = await r.json()
+    if (j?.nonce) return String(j.nonce)
+  } else {
+    // if 400 and message says missing wallet/anything, we’ll try next shapes
+    try {
+      const t = await r.text()
+      if (!/not found/i.test(t)) {
+        // fallthrough to other shapes regardless
+      }
+    } catch {}
+  }
+
+  // 2) try address param
+  r = await fetch(`${API_BASE}/auth/nonce?address=${encodeURIComponent(address)}`, {
+    credentials: 'include'
+  })
+  if (r.ok) {
+    const j = await r.json()
+    if (j?.nonce) return String(j.nonce)
+  }
+
+  // 3) POST body (covers APIs that require JSON body)
+  r = await fetch(`${API_BASE}/auth/nonce`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ wallet: address, address })
+  })
+  if (r.ok) {
+    const j = await r.json()
+    if (j?.nonce) return String(j.nonce)
+  }
+
+  const txt = await r.text().catch(() => '')
+  throw new Error(txt || `Unable to obtain nonce (HTTP ${r.status})`)
+}
+
+/** Verifies the signed nonce. We send both wallet & address, plus base64 + raw sig */
+async function verifySignature(params: {
+  address: string
+  nonce: string
+  signatureBytes: Uint8Array
+}) {
+  const { address, nonce, signatureBytes } = params
+  const signatureBase64 = bytesToBase64(signatureBytes)
+
+  const r = await fetch(`${API_BASE}/auth/verify`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({
+      wallet: address,
+      address,
+      nonce,
+      signatureBase64,
+      signature: Array.from(signatureBytes) // raw bytes too, in case backend expects that
+    })
+  })
+
+  if (!r.ok) {
+    const t = await r.text().catch(() => '')
+    throw new Error(t || `Verify failed (HTTP ${r.status})`)
+  }
+
+  const j = await r.json().catch(() => ({} as any))
+  const token: string | undefined = j?.token || j?.access_token || j?.jwt
+  if (!token) throw new Error('No token returned from verify')
+
+  try { localStorage.setItem('auth_token', token) } catch {}
+  return token
+}
+
+/** A tasteful, attractive connect & sign-in UI */
+export default function SignInWithWallet({ onSignedIn }: Props) {
+  const [connectedAddress, setConnectedAddress] = useState<string>('')
   const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState<string>('')
-  const [info, setInfo] = useState<string>('')
+  const [error, setError] = useState<string>('')
 
   const phantom = useMemo(() => getPhantom(), [])
 
   useEffect(() => {
-    // Auto-fill wallet if Phantom already connected.
-    if (phantom?.publicKey) setWallet(phantom.publicKey.toBase58())
+    if (phantom?.publicKey) {
+      setConnectedAddress(phantom.publicKey.toBase58())
+    }
   }, [phantom])
 
-  async function connectAndSign() {
-    setErr('')
-    setInfo('')
-    const prov = phantom
-
-    if (!prov?.isPhantom) {
-      setErr('Phantom wallet not found. Please install Phantom to continue.')
+  const connectAndSign = async () => {
+    setError('')
+    const p = getPhantom()
+    if (!p?.isPhantom) {
+      setError('Phantom wallet not found. Please install Phantom and try again.')
       return
     }
 
     try {
       setBusy(true)
 
-      // 1) Connect Phantom
-      const { publicKey } = await prov.connect()
+      // 1) connect
+      const { publicKey } = await p.connect()
       const address = publicKey.toBase58()
-      setWallet(address)
+      setConnectedAddress(address)
 
-      // 2) Ask backend for a nonce (IMPORTANT: backend expects ?wallet=)
-      const nonceRes = await fetch(
-        `${API_BASE}/auth/nonce?wallet=${encodeURIComponent(address)}`,
-        { credentials: 'include' }
-      )
+      // 2) get the nonce
+      const nonce = await fetchNonce(address)
 
-      if (!nonceRes.ok) {
-        const t = await nonceRes.text().catch(() => '')
-        throw new Error(t || `Failed to get nonce (HTTP ${nonceRes.status})`)
-      }
+      // 3) sign it
+      if (!p.signMessage) throw new Error('Wallet does not support signMessage')
+      const toSign = new TextEncoder().encode(String(nonce))
+      const { signature } = await p.signMessage(toSign, { display: 'utf8' })
 
-      const { nonce } = await nonceRes.json()
-      if (!nonce) throw new Error('Backend did not return a nonce')
+      // 4) verify with backend
+      await verifySignature({ address, nonce, signatureBytes: signature })
 
-      // 3) Wallet signs the nonce
-      if (!prov.signMessage) {
-        throw new Error('Wallet does not support signMessage')
-      }
-      const encoded = new TextEncoder().encode(String(nonce))
-      const { signature } = await prov.signMessage(encoded, { display: 'utf8' })
-
-      // If your API expects base64 instead of raw bytes, switch lines below:
-      // const signaturePayload = u8ToBase64(signature)
-      const signaturePayload = Array.from(signature)
-
-      // 4) Send signature for verification (IMPORTANT: backend expects { wallet, ... })
-      const verifyRes = await fetch(`${API_BASE}/auth/verify`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          wallet: address,
-          nonce,
-          signature: signaturePayload
-        })
-      })
-
-      if (!verifyRes.ok) {
-        const t = await verifyRes.text().catch(() => '')
-        throw new Error(t || `Verify failed (HTTP ${verifyRes.status})`)
-      }
-
-      const v = await verifyRes.json().catch(() => ({} as any))
-      const token: string | undefined = v?.token || v?.access_token || v?.jwt
-      if (!token) throw new Error('No token returned from verify')
-
-      try {
-        localStorage.setItem('auth_token', token)
-      } catch {}
-
-      setInfo('Signed in successfully!')
       onSignedIn?.(address)
     } catch (e: any) {
-      setErr(e?.message || 'Wallet sign-in failed')
+      setError(e?.message || 'Wallet sign-in failed')
     } finally {
       setBusy(false)
     }
   }
 
-  async function disconnect() {
-    setErr('')
-    setInfo('')
-    try {
-      await phantom?.disconnect?.()
-      setWallet('')
-      try { localStorage.removeItem('auth_token') } catch {}
-      setInfo('Disconnected.')
-    } catch (e: any) {
-      setErr(e?.message || 'Failed to disconnect')
-    }
+  /** ————————  STYLES  ———————— */
+  const gradientBg: React.CSSProperties = {
+    minHeight: '100vh',
+    width: '100%',
+    background:
+      'radial-gradient(1200px 600px at 20% 0%, #2a2b4a 0%, rgba(14,15,21,1) 40%), radial-gradient(1000px 500px at 120% 10%, #0f3b56 0%, rgba(14,15,21,1) 30%)',
+    display: 'grid',
+    placeItems: 'center',
+    padding: 16
   }
 
-  // ---------- UI (Beautiful, glassmorphism, responsive) ----------
+  const card: React.CSSProperties = {
+    width: 'min(92vw, 560px)',
+    background: 'rgba(20, 22, 30, 0.7)',
+    border: '1px solid rgba(120, 120, 240, 0.25)',
+    backdropFilter: 'blur(10px)',
+    WebkitBackdropFilter: 'blur(10px)',
+    borderRadius: 16,
+    padding: 22,
+    color: '#eaeaf0',
+    boxShadow:
+      '0 10px 30px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.05), inset 0 -1px 0 rgba(0,0,0,0.25)'
+  }
+
+  const headerRow: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 6
+  }
+
+  const badge: React.CSSProperties = {
+    fontSize: 12,
+    color: '#b9c4ff',
+    background:
+      'linear-gradient(90deg, rgba(108,92,231,0.15), rgba(52,152,219,0.15))',
+    border: '1px solid rgba(120,120,240,0.25)',
+    padding: '6px 10px',
+    borderRadius: 999,
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 8
+  }
+
+  const title: React.CSSProperties = {
+    fontSize: 22,
+    fontWeight: 700,
+    letterSpacing: 0.3,
+    margin: 0
+  }
+
+  const subtitle: React.CSSProperties = {
+    margin: '4px 0 16px 0',
+    opacity: 0.9,
+    lineHeight: 1.5
+  }
+
+  const connectBtn: React.CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    width: '100%',
+    padding: '14px 16px',
+    borderRadius: 12,
+    border: '1px solid rgba(120,120,240,0.35)',
+    background:
+      'linear-gradient(180deg, rgba(108,92,231,0.2), rgba(108,92,231,0.06))',
+    color: 'white',
+    fontWeight: 700,
+    cursor: busy ? 'not-allowed' : 'pointer',
+    boxShadow:
+      '0 10px 24px rgba(108,92,231,0.25), inset 0 1px 0 rgba(255,255,255,0.06)'
+  }
+
+  const smallRow: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    justifyContent: 'space-between',
+    marginTop: 12
+  }
+
+  const addressChip: React.CSSProperties = {
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+    fontSize: 12,
+    background: 'rgba(255,255,255,0.06)',
+    border: '1px solid rgba(255,255,255,0.08)',
+    padding: '6px 10px',
+    borderRadius: 8
+  }
+
+  const errBox: React.CSSProperties = {
+    marginTop: 12,
+    background: 'rgba(255, 99, 132, 0.08)',
+    border: '1px solid rgba(255,99,132,0.25)',
+    color: '#ff9aa9',
+    padding: '10px 12px',
+    borderRadius: 10,
+    whiteSpace: 'pre-wrap'
+  }
+
   return (
-    <div className={className} style={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', padding: 16, background: 'linear-gradient(135deg, #0f1220 0%, #171a2b 60%, #121316 100%)' }}>
-      {/* Embedded styles so you can drop-in without external CSS */}
-      <style>{`
-        .card {
-          width: min(560px, 92vw);
-          border-radius: 20px;
-          padding: 28px;
-          backdrop-filter: blur(10px);
-          background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02));
-          border: 1px solid rgba(255,255,255,0.12);
-          box-shadow: 0 10px 30px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.06);
-          color: #e6e8ff;
-        }
-        .title {
-          font-size: 28px;
-          font-weight: 800;
-          letter-spacing: 0.3px;
-          margin: 0 0 6px;
-          background: linear-gradient(90deg, #b3b8ff, #8ddcff, #b3b8ff);
-          background-size: 200% 100%;
-          -webkit-background-clip: text;
-          background-clip: text;
-          color: transparent;
-          animation: shine 6s linear infinite;
-        }
-        @keyframes shine { 0% { background-position: 0% 50%; } 100% { background-position: 200% 50%; } }
-        .subtitle {
-          margin: 0 0 18px;
-          opacity: 0.85;
-          font-size: 14px;
-        }
-        .row {
-          display: grid;
-          grid-template-columns: 1fr auto;
-          gap: 12px;
-          align-items: center;
-          margin-top: 14px;
-        }
-        .pill {
-          padding: 10px 12px;
-          background: rgba(255,255,255,0.06);
-          border: 1px solid rgba(255,255,255,0.12);
-          border-radius: 12px;
-          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-          font-size: 13px;
-          color: #cbd0ff;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-        .btn {
-          border: 0;
-          border-radius: 12px;
-          padding: 12px 16px;
-          font-size: 15px;
-          font-weight: 700;
-          letter-spacing: 0.2px;
-          color: #0e1020;
-          background: linear-gradient(180deg, #8ddcff, #7ecbff 40%, #69b3ff);
-          cursor: pointer;
-          transition: transform .08s ease, filter .15s ease, box-shadow .2s ease;
-          box-shadow: 0 8px 18px rgba(125, 195, 255, 0.45);
-        }
-        .btn:hover { filter: brightness(1.06); transform: translateY(-1px); }
-        .btn:active { transform: translateY(0px) scale(.99); }
-        .btn:disabled { filter: grayscale(.3) brightness(.85); cursor: not-allowed; }
-        .btn-ghost {
-          border: 1px solid rgba(255,255,255,0.16);
-          background: transparent;
-          color: #dfe4ff;
-          box-shadow: none;
-        }
-        .btn-ghost:hover { background: rgba(255,255,255,0.05); }
-        .hint {
-          margin-top: 14px;
-          font-size: 12px;
-          opacity: .75;
-        }
-        .error {
-          margin-top: 12px;
-          padding: 10px 12px;
-          border-radius: 12px;
-          background: rgba(255, 71, 87, 0.08);
-          color: #ff8189;
-          border: 1px solid rgba(255, 71, 87, 0.35);
-          font-size: 13px;
-          white-space: pre-wrap;
-        }
-        .ok {
-          margin-top: 12px;
-          padding: 10px 12px;
-          border-radius: 12px;
-          background: rgba(46, 213, 115, 0.08);
-          color: #8cf5b4;
-          border: 1px solid rgba(46, 213, 115, 0.35);
-          font-size: 13px;
-        }
-        .header {
-          display: grid;
-          grid-template-columns: auto 1fr;
-          gap: 14px;
-          align-items: center;
-          margin-bottom: 8px;
-        }
-        .logo {
-          width: 44px; height: 44px; border-radius: 12px;
-          display: grid; place-items: center;
-          background: linear-gradient(180deg, #1d2037, #121424);
-          border: 1px solid rgba(255,255,255,0.1);
-          box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);
-        }
-        .tag {
-          display:inline-block;
-          padding: 4px 8px;
-          border-radius: 999px;
-          font-weight: 700;
-          font-size: 10px;
-          letter-spacing: .6px;
-          background: rgba(120, 122, 255, 0.12);
-          color: #aab0ff;
-          border: 1px solid rgba(120, 122, 255, 0.25);
-          text-transform: uppercase;
-        }
-        .grid {
-          display: grid;
-          gap: 12px;
-          margin: 10px 0 6px;
-        }
-      `}</style>
-
-      <div className="card">
-        <div className="header">
-          <div className="logo">
-            {/* Simple Phantom-ish mark */}
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
-              <path d="M12 2c5.523 0 10 4.477 10 10 0 4.02-2.39 7.48-5.82 9.06-.42.2-.91.02-1.11-.39-.17-.37-.03-.8.31-1.01A7.987 7.987 0 0 0 20 12c0-4.418-3.582-8-8-8S4 7.582 4 12c0 2.01.74 3.85 1.96 5.26.29.33.25.82-.08 1.11-.29.25-.72.26-1.02.04C2.93 16.85 2 14.53 2 12 2 6.477 6.477 2 12 2Z" fill="#b6baff"/>
-              <circle cx="9" cy="11" r="1.5" fill="#fff"/>
-              <circle cx="15" cy="11" r="1.5" fill="#fff"/>
-            </svg>
-          </div>
-          <div>
-            <div className="title">Sign in with Phantom</div>
-            <div className="subtitle">
-              Secure sign-in using a one-time nonce verified by your wallet.
-              <span className="tag" style={{ marginLeft: 8 }}>web3</span>
-            </div>
+    <div style={gradientBg}>
+      <div style={card}>
+        <div style={headerRow}>
+          {/* Phantom logo-ish */}
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden>
+            <circle cx="12" cy="12" r="10" fill="#8b5cf6" />
+            <path d="M8 13c2 3 6 3 8 0" stroke="white" strokeWidth="1.7" strokeLinecap="round"/>
+            <circle cx="9.2" cy="9.5" r="1.2" fill="white"/>
+            <circle cx="14.8" cy="9.5" r="1.2" fill="white"/>
+          </svg>
+          <div style={badge}>
+            <span>Sign in with Phantom</span>
           </div>
         </div>
 
-        <div className="grid">
-          <div className="row">
-            <div className="pill" title={wallet || 'Not connected'}>
-              {wallet ? wallet : 'Wallet: Not connected'}
+        <h1 style={title}>Welcome to FST</h1>
+        <p style={subtitle}>
+          Connect your wallet and sign a one-time nonce to prove ownership.
+          No gas, no approvals — just a secure message signature.
+        </p>
+
+        <button
+          style={connectBtn}
+          onClick={connectAndSign}
+          disabled={busy}
+          aria-busy={busy}
+        >
+          {busy ? (
+            <>
+              <span
+                aria-hidden
+                style={{
+                  width: 16,
+                  height: 16,
+                  borderRadius: '50%',
+                  border: '2px solid rgba(255,255,255,0.45)',
+                  borderTopColor: 'transparent',
+                  display: 'inline-block',
+                  animation: 'spin 0.8s linear infinite'
+                }}
+              />
+              Connecting & Signing…
+            </>
+          ) : (
+            <>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+                <path d="M3 12h14M13 5l7 7-7 7" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              Connect Phantom & Sign In
+            </>
+          )}
+        </button>
+
+        <div style={smallRow}>
+          <div style={{ opacity: 0.8, fontSize: 12 }}>
+            Secure by message signature • Non-custodial
+          </div>
+          {connectedAddress && (
+            <div style={addressChip} title={connectedAddress}>
+              {connectedAddress.slice(0, 6)}…{connectedAddress.slice(-6)}
             </div>
-            {wallet ? (
-              <button className="btn btn-ghost" onClick={disconnect} disabled={busy}>
-                Disconnect
-              </button>
-            ) : null}
-          </div>
-
-          <button className="btn" onClick={connectAndSign} disabled={busy}>
-            {busy ? 'Waiting for wallet…' : wallet ? 'Sign Nonce & Continue' : 'Connect Phantom & Sign In'}
-          </button>
-
-          {err && <div className="error">{err}</div>}
-          {info && <div className="ok">{info}</div>}
-
-          <div className="hint">
-            Tip: If you don’t see the Phantom popup, click its icon in your browser toolbar.
-          </div>
+          )}
         </div>
+
+        {!!error && <div style={errBox}>{error}</div>}
       </div>
+
+      {/* tiny keyframes for the spinner */}
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+      `}</style>
     </div>
   )
 }

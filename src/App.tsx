@@ -1,5 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react'
+import SignInWithWallet from './components/SignInWithWallet'
 
+/** If you have these pages already, keep them.
+ *  You can replace these placeholders with your actual imports. */
 import Landing from './pages_Landing'
 import HomeHub from './pages_HomeHub'
 import ContestTypes from './pages_ContestTypes'
@@ -19,7 +22,6 @@ import AdminPage from './pages_Admin'
 import HistoryPage from './pages_History'
 import Transfers from './pages_Transfers'
 import Profile from './pages_Profile'
-import SignInWithWallet from './components/SignInWithWallet'
 
 type Route =
   | 'landing' | 'connect' | 'home' | 'contestTypes' | 'teamSelect' | 'joinContest'
@@ -45,7 +47,7 @@ export default function App() {
   const stackRef = useRef<Route[]>(['landing'])
   const [authed, setAuthed] = useState<boolean>(!!getToken())
   const [isAdmin, setIsAdmin] = useState(false)
-  const [wallet, setWallet] = useState<string>('')
+  const [address, setAddress] = useState<string>('')
 
   useEffect(() => {
     const tg = getTG()
@@ -91,7 +93,7 @@ export default function App() {
     if (s.length > 1) { s.pop(); setRoute(s[s.length - 1]) }
   }
 
-  // Check admin from token (optional)
+  // token -> check admin flag (optional; you can remove)
   useEffect(() => {
     const token = getToken()
     if (!token) { setIsAdmin(false); return }
@@ -114,7 +116,7 @@ export default function App() {
   }, [authed])
 
   const handleSignedIn = (addr: string) => {
-    setWallet(addr)
+    setAddress(addr)
     setAuthed(true)
     go('home')
   }
@@ -125,7 +127,7 @@ export default function App() {
   }
 
   const onContestJoined = () => { go('teamSelect') }
-  const handleAdminNav = () => { if (!isAdmin) { alert('Admin only'); return } go('admin') }
+  const handleAdminNav = () => { if (!isAdmin) return alert('Admin only'); go('admin') }
 
   return (
     <>
@@ -156,7 +158,7 @@ export default function App() {
         />
       )}
 
-      {route === 'contestTypes' && <ContestTypes onBack={back} onJoined={() => onContestJoined()} />}
+      {route === 'contestTypes' && <ContestTypes onBack={back} onJoined={onContestJoined} />}
       {route === 'teamSelect' && <TeamSelection onBack={back} onNext={() => go('leaderboard')} />}
       {route === 'joinContest' && <JoinContest onSelect={() => go('create')} onBack={back} />}
       {route === 'create' && <CreateTeam onNext={() => go('leaderboard')} onBack={back} />}
