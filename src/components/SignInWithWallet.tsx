@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { PublicKey } from '@solana/web3.js'
 import { Buffer } from 'buffer'
 
-// polyfill Buffer (vite/browser)
+// ———————————————————————————————————————————
+// Buffer polyfill (vite/browser)
 ;(window as any).Buffer ??= Buffer
 
 type PhantomProvider = {
@@ -17,18 +18,18 @@ type PhantomProvider = {
 }
 
 type Props = {
-  onSignedIn?: (address: string) => void
+  onSignedIn?: (address: string, token?: string) => void
 }
 
 // ———————————————————————————————————————————
 // Config
 // ———————————————————————————————————————————
 const API_BASE =
-  (import.meta as any).env?.VITE_API_BASE ||
+  (import.meta as any)?.env?.VITE_API_BASE ||
   'https://fst-api.onrender.com'
 
 // ———————————————————————————————————————————
-// Utils
+// Small utils
 // ———————————————————————————————————————————
 function getPhantom(): PhantomProvider | undefined {
   return (window as any)?.solana
@@ -44,6 +45,30 @@ function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes)
     .map(b => b.toString(16).padStart(2, '0'))
     .join('')
+}
+
+// Tiny base58 encoder (no dep)
+const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+function bytesToBase58(bytes: Uint8Array): string {
+  if (bytes.length === 0) return ''
+  let digits = [0]
+  for (let i = 0; i < bytes.length; ++i) {
+    let carry = bytes[i]
+    for (let j = 0; j < digits.length; ++j) {
+      const x = (digits[j] << 8) + carry
+      digits[j] = x % 58
+      carry = (x / 58) | 0
+    }
+    while (carry) {
+      digits.push(carry % 58)
+      carry = (carry / 58) | 0
+    }
+  }
+  // deal with leading zeros
+  for (let k = 0; bytes[k] === 0 && k < bytes.length - 1; k++) {
+    digits.push(0)
+  }
+  return digits.reverse().map(d => BASE58_ALPHABET[d]).join('')
 }
 
 function nowIso() {
@@ -65,17 +90,17 @@ async function fetchNoncePayload(address: string): Promise<{
   message: string
   expiresInSec?: number
 }> {
-  // Your API wants ?wallet= (we keep ?address= as a fallback)
+  // This API previously rejected ?address= and wanted ?wallet=
   const urls = [
     `${API_BASE}/auth/nonce?wallet=${encodeURIComponent(address)}`,
     `${API_BASE}/auth/nonce?address=${encodeURIComponent(address)}`
   ]
 
-  let lastErrTxt = ''
+  let lastErr = ''
   for (const u of urls) {
     const r = await fetch(u, { credentials: 'include' })
     if (r.ok) {
-      const j = await r.json()
+      const j = await r.json().catch(() => null as any)
       if (j?.nonce) {
         return {
           nonce: String(j.nonce),
@@ -83,15 +108,15 @@ async function fetchNoncePayload(address: string): Promise<{
           expiresInSec: typeof j.expiresInSec === 'number' ? j.expiresInSec : undefined
         }
       }
-      if (typeof j === 'string') {
+      if (typeof j === 'string' && j) {
         return { nonce: j, message: fallbackMessage(address, j) }
       }
     } else {
-      lastErrTxt = (await r.text().catch(() => '')) || `HTTP ${r.status}`
+      lastErr = (await r.text().catch(() => '')) || `HTTP ${r.status}`
     }
   }
 
-  // POST fallback
+  // POST fallback shape
   const r = await fetch(`${API_BASE}/auth/nonce`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -99,7 +124,7 @@ async function fetchNoncePayload(address: string): Promise<{
     body: JSON.stringify({ wallet: address, address })
   })
   if (r.ok) {
-    const j = await r.json()
+    const j = await r.json().catch(() => null as any)
     if (j?.nonce) {
       return {
         nonce: String(j.nonce),
@@ -109,8 +134,8 @@ async function fetchNoncePayload(address: string): Promise<{
     }
   }
 
-  const txt = lastErrTxt || (await r.text().catch(() => '')) || 'Unable to obtain nonce'
-  throw new Error(txt)
+  const fallbackTxt = (await r.text().catch(() => '')) || lastErr || 'Unable to obtain nonce'
+  throw new Error(fallbackTxt)
 }
 
 function isPortClosedErr(e: unknown) {
@@ -118,10 +143,9 @@ function isPortClosedErr(e: unknown) {
   return /message port closed/i.test(msg) || /lastError/i.test(msg)
 }
 
-// Up to 3 tries, small backoff, reconnect before retry for Phantom’s port flake
+// Up to 3 tries; reconnect between tries to dodge Phantom port flake
 async function signWithResiliency(
   provider: PhantomProvider,
-  address: string,
   messageUtf8: string,
   log: (s: string) => void
 ) {
@@ -138,7 +162,7 @@ async function signWithResiliency(
     return await attempt(1)
   } catch (e) {
     if (!isPortClosedErr(e)) throw e
-    log('Phantom reported: message port closed. Retrying…')
+    log('Phantom: message port closed. Retrying…')
   }
 
   try {
@@ -148,17 +172,17 @@ async function signWithResiliency(
     return await attempt(2)
   } catch (e) {
     if (!isPortClosedErr(e)) throw e
-    log('Still getting port closed. Final retry after short backoff…')
+    log('Still getting port closed. Final retry…')
   }
 
-  await new Promise(res => setTimeout(res, 400))
+  await new Promise(res => setTimeout(res, 350))
   await provider.disconnect().catch(() => {})
   await provider.connect().catch(() => {})
   return await attempt(3)
 }
 
 // ———————————————————————————————————————————
-// Verify: try multiple payload shapes until one works
+// Verify: try MANY shapes (wallet/address/publicKey + base64/base58/bytes/etc.)
 // ———————————————————————————————————————————
 async function verifySignatureFlexible(params: {
   address: string
@@ -166,44 +190,60 @@ async function verifySignatureFlexible(params: {
   message: string
   signatureBytes: Uint8Array
   log: (s: string) => void
-}) {
+}): Promise<string> {
   const { address, nonce, message, signatureBytes, log } = params
   const base64 = bytesToBase64(signatureBytes)
+  const base58 = bytesToBase58(signatureBytes)
   const hex = bytesToHex(signatureBytes)
   const bytesArray = Array.from(signatureBytes)
 
-  // Different backends name things differently; we’ll probe several shapes.
-  const attempts: {
-    label: string
-    body: Record<string, any>
-  }[] = [
-    {
-      label: 'A: {wallet,address,nonce,message,signatureBase64}',
-      body: { wallet: address, address, nonce, message, signatureBase64: base64 }
-    },
-    {
-      label: 'B: {address,nonce,message,signature: base64}',
-      body: { address, nonce, message, signature: base64 }
-    },
-    {
-      label: 'C: {wallet,nonce,signedMessage: base64}',
-      body: { wallet: address, nonce, signedMessage: base64 }
-    },
-    {
-      label: 'D: {address,nonce,message,signature: bytes[]}',
-      body: { address, nonce, message, signature: bytesArray }
-    },
-    {
-      label: 'E: {address,nonce,message,signatureHex}',
-      body: { address, nonce, message, signatureHex: hex }
-    },
-    {
-      label: 'F: {wallet,nonce,message,signature: bytes[]}',
-      body: { wallet: address, nonce, message, signature: bytesArray }
-    }
+  const pk = address // base58 for Solana public key
+  const commonFlags = { messageEncoding: 'utf8' }
+
+  // IMPORTANT: many backends are picky about names; we’ll try several
+  const attempts: { label: string; body: Record<string, any> }[] = [
+    // Typical Solana verify
+    { label: 'A: wallet + message + signatureBase64',
+      body: { wallet: pk, message, signatureBase64: base64, nonce, ...commonFlags } },
+    { label: 'B: address + message + signature(base64)',
+      body: { address: pk, message, signature: base64, nonce, ...commonFlags } },
+    { label: 'C: publicKey + message + signatureBase64',
+      body: { publicKey: pk, message, signatureBase64: base64, nonce, ...commonFlags } },
+
+    // Some APIs require walletAddress / wallet_address
+    { label: 'D: walletAddress + signatureBase64',
+      body: { walletAddress: pk, message, signatureBase64: base64, nonce, ...commonFlags } },
+    { label: 'E: wallet_address + signatureBase64',
+      body: { wallet_address: pk, message, signatureBase64: base64, nonce, ...commonFlags } },
+
+    // Base58 & HEX signatures
+    { label: 'F: address + signatureB58',
+      body: { address: pk, message, signatureB58: base58, nonce, ...commonFlags } },
+    { label: 'G: wallet + signatureHex',
+      body: { wallet: pk, message, signatureHex: hex, nonce, ...commonFlags } },
+
+    // Raw bytes
+    { label: 'H: address + signature (bytes[])',
+      body: { address: pk, message, signature: bytesArray, nonce, ...commonFlags } },
+    { label: 'I: wallet + signature (bytes[])',
+      body: { wallet: pk, message, signature: bytesArray, nonce, ...commonFlags } },
+
+    // Some servers name the message as signedMessage or data
+    { label: 'J: wallet + signedMessage(base64)',
+      body: { wallet: pk, signedMessage: base64, nonce, ...commonFlags } },
+    { label: 'K: publicKey + data(base64)',
+      body: { publicKey: pk, data: base64, nonce, ...commonFlags } },
+
+    // Minimal forms used by some SIWS (Sign In With Solana) examples
+    { label: 'L: { publicKey, message, signature }',
+      body: { publicKey: pk, message, signature: base64 } },
+    { label: 'M: { wallet, message, signature }',
+      body: { wallet: pk, message, signature: base64 } },
   ]
 
   let lastText = ''
+  let lastStatus = 0
+
   for (const a of attempts) {
     log(`Verifying (${a.label})…`)
     const r = await fetch(`${API_BASE}/auth/verify`, {
@@ -212,23 +252,26 @@ async function verifySignatureFlexible(params: {
       credentials: 'include',
       body: JSON.stringify(a.body)
     })
+    lastStatus = r.status
     if (r.ok) {
       const j = await r.json().catch(() => ({} as any))
-      const token: string | undefined = j?.token || j?.access_token || j?.jwt
-      if (!token) {
-        lastText = 'Verify 200 OK but no token in response'
-        continue
+      const token: string | undefined = j?.token || j?.access_token || j?.jwt || j?.data?.token
+      if (token) {
+        try { localStorage.setItem('auth_token', token) } catch {}
+        log(`Verify success via ${a.label}`)
+        return token
       }
-      try { localStorage.setItem('auth_token', token) } catch {}
-      log(`Verify success via ${a.label}`)
-      return token
+      lastText = 'Verify 200 but no token field in response'
+      // try next
     } else {
-      lastText = (await r.text().catch(() => '')) || `HTTP ${r.status}`
-      // Keep trying next shape
+      const txt = await r.text().catch(() => '')
+      lastText = txt || `HTTP ${r.status}`
+      log(`→ ${r.status} ${txt ? `| ${txt}` : ''}`)
+      // keep trying next shapes
     }
   }
 
-  throw new Error(lastText || 'Verify failed for all payload shapes')
+  throw new Error(lastText || `Verify failed; last status ${lastStatus}`)
 }
 
 // ———————————————————————————————————————————
@@ -245,7 +288,8 @@ export default function SignInWithWallet({ onSignedIn }: Props) {
     if (phantom?.publicKey) setConnectedAddress(phantom.publicKey.toBase58())
   }, [phantom])
 
-  const pushLog = (s: string) => setLogLines(prev => [...prev, s].slice(-8))
+  const pushLog = (s: string) =>
+    setLogLines(prev => [...prev, s].slice(-10))
 
   const connectAndSign = async () => {
     setError('')
@@ -275,10 +319,10 @@ export default function SignInWithWallet({ onSignedIn }: Props) {
       pushLog('Preparing message…')
       const message = payload.message || fallbackMessage(address, payload.nonce)
 
-      // Sign (with resiliency for “message port closed”)
-      const signature = await signWithResiliency(p, address, message, pushLog)
+      // Sign with resiliency
+      const signature = await signWithResiliency(p, message, pushLog)
 
-      // Verify — try several payload shapes
+      // Verify with many payload shapes
       const token = await verifySignatureFlexible({
         address,
         nonce: payload.nonce,
@@ -288,10 +332,7 @@ export default function SignInWithWallet({ onSignedIn }: Props) {
       })
 
       pushLog('Signed in ✅')
-      onSignedIn?.(address)
-
-      // Optional: you can navigate or emit an event with `token` here
-      // e.g., window.dispatchEvent(new CustomEvent('fst:authed', { detail: { token } }))
+      onSignedIn?.(address, token)
     } catch (e: any) {
       setError(e?.message || 'Wallet sign-in failed')
       pushLog(`Error: ${String(e?.message || e)}`)
@@ -414,14 +455,12 @@ export default function SignInWithWallet({ onSignedIn }: Props) {
             <circle cx="9.2" cy="9.5" r="1.2" fill="white"/>
             <circle cx="14.8" cy="9.5" r="1.2" fill="white"/>
           </svg>
-          <div style={badge}>
-            <span>Sign in with Phantom</span>
-          </div>
+          <div style={badge}><span>Sign in with Phantom</span></div>
         </div>
 
         <h1 style={title}>Welcome to FST</h1>
         <p style={subtitle}>
-          Connect your wallet and sign a one-time message from the server to prove ownership.
+          Connect your wallet and sign a one-time server message to prove ownership.
           No gas, no approvals — just a secure signature.
         </p>
 
