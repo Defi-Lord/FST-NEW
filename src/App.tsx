@@ -1,9 +1,6 @@
-// src/App.tsx
 import React, { useEffect, useRef, useState } from 'react'
-import { useApp, type ContestRealm } from './state'
 
 import Landing from './pages_Landing'
-// import ConnectWallet from './pages_ConnectWallet'
 import HomeHub from './pages_HomeHub'
 import ContestTypes from './pages_ContestTypes'
 import TeamSelection from './pages_TeamSelection'
@@ -19,13 +16,10 @@ import HowToPlay from './pages_HowToPlay'
 import AboutUs from './pages_AboutUs'
 import ContactUs from './pages_ContactUs'
 import AdminPage from './pages_Admin'
-import SignInWithWallet from './components/SignInWithWallet'
 import HistoryPage from './pages_History'
 import Transfers from './pages_Transfers'
 import Profile from './pages_Profile'
-
-import { useWallet } from '@solana/wallet-adapter-react'
-import './styles/menu-drawer.css'
+import SignInWithWallet from './components/SignInWithWallet'
 
 type Route =
   | 'landing' | 'connect' | 'home' | 'contestTypes' | 'teamSelect' | 'joinContest'
@@ -35,17 +29,13 @@ type Route =
 
 const API_BASE =
   (import.meta as any).env?.VITE_API_BASE ||
-  // Fallback to your hosted API so prod builds “just work”.
   'https://fst-api.onrender.com'
 
 const getToken = () => {
   try { return localStorage.getItem('auth_token') || '' } catch { return '' }
 }
 
-function getTG() {
-  return (window as any)?.Telegram?.WebApp
-}
-
+function getTG() { return (window as any)?.Telegram?.WebApp }
 function supports(min: string) {
   try { return getTG()?.isVersionAtLeast?.(min) === true } catch { return false }
 }
@@ -53,12 +43,10 @@ function supports(min: string) {
 export default function App() {
   const [route, setRoute] = useState<Route>('landing')
   const stackRef = useRef<Route[]>(['landing'])
-  const { setRealm, setWalletAddress } = useApp()
-  const wallet = useWallet()
-  const [authed, setAuthed] = useState(false)
+  const [authed, setAuthed] = useState<boolean>(!!getToken())
   const [isAdmin, setIsAdmin] = useState(false)
+  const [address, setAddress] = useState<string>('')
 
-  // Initialize Telegram WebApp UI
   useEffect(() => {
     const tg = getTG()
     try {
@@ -71,145 +59,77 @@ export default function App() {
     } catch {}
   }, [])
 
-  // Toggle/show back button depending on route
   useEffect(() => {
     const tg = getTG()
     const showBack = !['landing', 'home'].includes(route)
     if (!supports('6.1')) return
-    try {
-      showBack ? tg?.BackButton?.show?.() : tg?.BackButton?.hide?.()
-    } catch {}
+    try { showBack ? tg?.BackButton?.show?.() : tg?.BackButton?.hide?.() } catch {}
   }, [route])
 
-  // Handle Telegram back presses using our manual stack
   useEffect(() => {
     const tg = getTG()
     if (!supports('6.1')) return
-
     const onBack = () => {
-      const stack = stackRef.current
-      if (stack.length > 1) {
-        stack.pop()
-        setRoute(stack[stack.length - 1])
+      const s = stackRef.current
+      if (s.length > 1) {
+        s.pop()
+        setRoute(s[s.length - 1])
       }
     }
-
     try {
       tg?.BackButton?.onClick?.(onBack)
       return () => tg?.BackButton?.offClick?.(onBack)
-    } catch {
-      return
-    }
+    } catch { return }
   }, [])
 
   const go = (next: Route) => {
-    const stack = stackRef.current
-    stack.push(next)
-    setRoute(next)
+    const s = stackRef.current
+    s.push(next); setRoute(next)
   }
-
   const back = () => {
-    const stack = stackRef.current
-    if (stack.length > 1) {
-      stack.pop()
-      setRoute(stack[stack.length - 1])
-    }
+    const s = stackRef.current
+    if (s.length > 1) { s.pop(); setRoute(s[s.length - 1]) }
   }
 
-  const handleConnected = (addr: string) => {
-    try { localStorage.setItem('sol_wallet', addr) } catch {}
-    setWalletAddress(addr)
-    setRealm('free')
-    go('home')
-  }
-
-  // If a token already exists (e.g., returned by SignInWithWallet), hydrate auth + admin
+  // token -> check admin flag
   useEffect(() => {
-    (async () => {
-      setAuthed(false)
-      setIsAdmin(false)
-      const addr = wallet?.publicKey?.toBase58() || ''
-      const token = getToken()
-      if (!token) return
-
-      // Resolve /me with Authorization header
-      try {
-        const me = await fetch(`${API_BASE}/me`, {
-          headers: { Authorization: `Bearer ${token}` },
-          credentials: 'include',
-        })
-        if (me.ok) {
-          const j = await me.json().catch(() => null)
-          const effectiveAddr = j?.user?.id || addr || ''
-          if (effectiveAddr) handleConnected(effectiveAddr)
-          setAuthed(true)
-        }
-      } catch {}
-
-      // Check admin role from token
+    const token = getToken()
+    if (!token) { setIsAdmin(false); return }
+    ;(async () => {
       try {
         const r = await fetch(`${API_BASE}/auth/introspect`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ token }),
-          credentials: 'include',
+          credentials: 'include'
         })
         if (r.ok) {
-          const j = await r.json()
+          const j = await r.json().catch(() => null)
           setIsAdmin(String(j?.payload?.role || '').toUpperCase() === 'ADMIN')
         } else {
           setIsAdmin(false)
         }
       } catch { setIsAdmin(false) }
     })()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wallet.connected, wallet.publicKey?.toBase58()])
-
-  // If a token shows up later, re-run a lightweight “me” to hydrate the address
-  useEffect(() => {
-    const i = setInterval(() => {
-      if (!authed && getToken()) {
-        setAuthed(true)
-        ;(async () => {
-          try {
-            const token = getToken()
-            const me = await fetch(`${API_BASE}/me`, {
-              headers: { Authorization: `Bearer ${token}` },
-              credentials: 'include',
-            })
-            if (me.ok) {
-              const j = await me.json().catch(() => null)
-              const addr = j?.user?.id
-              if (addr) handleConnected(addr)
-            }
-          } catch {}
-        })()
-      }
-    }, 800)
-    return () => clearInterval(i)
   }, [authed])
 
+  const handleSignedIn = (addr: string) => {
+    setAddress(addr)
+    setAuthed(true)
+    go('home')
+  }
+
   const onLaunch = () => {
-    const token = getToken()
-    if (token) {
-      setRealm('free')
-      go('home')
-      return
-    }
+    if (getToken()) { go('home'); return }
     go('connect')
   }
 
-  const onContestJoined = (realm?: ContestRealm) => {
-    const picked: ContestRealm = realm || 'weekly'
-    setRealm(picked)
+  const onContestJoined = () => {
     go('teamSelect')
   }
 
   const handleAdminNav = () => {
-    if (!isAdmin) {
-      alert('Admin only')
-      return
-    }
+    if (!isAdmin) { alert('Admin only'); return }
     go('admin')
   }
 
@@ -219,7 +139,7 @@ export default function App() {
 
       {route === 'connect' && (
         <div style={{ display: 'grid', gap: 12, padding: 16 }}>
-          <SignInWithWallet />
+          <SignInWithWallet onSignedIn={handleSignedIn} />
           <small>Tip: If you don’t see the wallet popup, click the Phantom icon in your browser toolbar.</small>
         </div>
       )}
@@ -245,7 +165,7 @@ export default function App() {
         />
       )}
 
-      {route === 'contestTypes' && <ContestTypes onBack={back} onJoined={onContestJoined as any} />}
+      {route === 'contestTypes' && <ContestTypes onBack={back} onJoined={() => onContestJoined()} />}
       {route === 'teamSelect' && <TeamSelection onBack={back} onNext={() => go('leaderboard')} />}
       {route === 'joinContest' && <JoinContest onSelect={() => go('create')} onBack={back} />}
       {route === 'create' && <CreateTeam onNext={() => go('leaderboard')} onBack={back} />}
