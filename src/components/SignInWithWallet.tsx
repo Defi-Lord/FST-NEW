@@ -2,12 +2,13 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { PublicKey } from '@solana/web3.js'
 import { Buffer } from 'buffer'
 
+// polyfill Buffer (vite/browser)
 ;(window as any).Buffer ??= Buffer
 
 type PhantomProvider = {
   isPhantom?: boolean
   publicKey?: PublicKey
-  connect: (opts?: any) => Promise<{ publicKey: PublicKey }>
+  connect: (opts?: { onlyIfTrusted?: boolean }) => Promise<{ publicKey: PublicKey }>
   disconnect: () => Promise<void>
   signMessage?: (
     message: Uint8Array,
@@ -19,25 +20,25 @@ type Props = {
   onSignedIn?: (address: string) => void
 }
 
-/** Change if you host the API somewhere else */
 const API_BASE =
   (import.meta as any).env?.VITE_API_BASE ||
   'https://fst-api.onrender.com'
 
-/** Utilities */
+// ————— Utils —————
 function getPhantom(): PhantomProvider | undefined {
   return (window as any)?.solana
 }
+
 function bytesToBase64(bytes: Uint8Array): string {
   let s = ''
   for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i])
   return btoa(s)
 }
+
 function nowIso() {
   try { return new Date().toISOString() } catch { return '' }
 }
 
-/** Build a safe fallback message if API returns only a nonce */
 function fallbackMessage(addr: string, nonce: string) {
   return `FST login
 
@@ -48,15 +49,15 @@ Issued At: ${nowIso()}
 By signing, you prove ownership of this wallet.`
 }
 
-/** Fetch nonce (and possibly a precomposed message) */
 async function fetchNoncePayload(address: string): Promise<{
   nonce: string
   message: string
   expiresInSec?: number
 }> {
-  // Prefer wallet param (your API expects this)
+  // Your API expects "wallet" (you saw the 400 when using ?address=)
   const urls = [
     `${API_BASE}/auth/nonce?wallet=${encodeURIComponent(address)}`,
+    // keep address as a graceful fallback if backend accepts both eventually
     `${API_BASE}/auth/nonce?address=${encodeURIComponent(address)}`
   ]
 
@@ -72,19 +73,15 @@ async function fetchNoncePayload(address: string): Promise<{
           expiresInSec: typeof j.expiresInSec === 'number' ? j.expiresInSec : undefined
         }
       }
-      // if body is just a string nonce
       if (typeof j === 'string') {
-        return {
-          nonce: j,
-          message: fallbackMessage(address, j)
-        }
+        return { nonce: j, message: fallbackMessage(address, j) }
       }
     } else {
       lastErrTxt = (await r.text().catch(() => '')) || `HTTP ${r.status}`
     }
   }
 
-  // Try POST body as a final fallback
+  // POST body fallback
   const r = await fetch(`${API_BASE}/auth/nonce`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -106,7 +103,6 @@ async function fetchNoncePayload(address: string): Promise<{
   throw new Error(txt)
 }
 
-/** Verify signature with backend */
 async function verifySignature(params: {
   address: string
   nonce: string
@@ -143,86 +139,118 @@ async function verifySignature(params: {
   return token
 }
 
-/** Phantom sometimes throws a transient “message port closed” error; retry once */
-async function signWithRetry(
+function isPortClosedErr(e: unknown) {
+  const msg = String((e as any)?.message || e || '')
+  return /message port closed/i.test(msg) || /lastError/i.test(msg)
+}
+
+// Up to 3 tries, small backoff, reconnect before retry
+async function signWithResiliency(
   provider: PhantomProvider,
-  msgBytes: Uint8Array
-): Promise<Uint8Array> {
-  const attempt = async () => {
+  address: string,
+  messageUtf8: string,
+  log: (s: string) => void
+) {
+  const toSign = new TextEncoder().encode(messageUtf8)
+
+  const attempt = async (n: number) => {
+    log(`Signing (try ${n})…`)
     if (!provider.signMessage) throw new Error('Wallet does not support signMessage')
-    const { signature } = await provider.signMessage(msgBytes, { display: 'utf8' })
+    const { signature } = await provider.signMessage(toSign, { display: 'utf8' })
     return signature
   }
 
   try {
-    return await attempt()
-  } catch (e: any) {
-    const txt = String(e?.message || e)
-    if (/message port closed/i.test(txt) || /lastError/i.test(txt)) {
-      // tiny backoff & second try
-      await new Promise(res => setTimeout(res, 350))
-      return await attempt()
-    }
-    throw e
+    return await attempt(1)
+  } catch (e) {
+    if (!isPortClosedErr(e)) throw e
+    log('Phantom reported: message port closed. Retrying…')
   }
+
+  // retry 2: reconnect then sign
+  try {
+    log('Reconnecting wallet (retry 2)…')
+    await provider.disconnect().catch(() => {})
+    await provider.connect().catch(() => {})
+    return await attempt(2)
+  } catch (e) {
+    if (!isPortClosedErr(e)) throw e
+    log('Still getting port closed. Final retry after short backoff…')
+  }
+
+  // retry 3: small backoff + reconnect again
+  await new Promise(res => setTimeout(res, 400))
+  await provider.disconnect().catch(() => {})
+  await provider.connect().catch(() => {})
+  return await attempt(3)
 }
 
-/** Pretty Connect & Sign Component */
+// ————— Component —————
 export default function SignInWithWallet({ onSignedIn }: Props) {
   const [connectedAddress, setConnectedAddress] = useState<string>('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>('')
-
+  const [logLines, setLogLines] = useState<string[]>([])
   const phantom = useMemo(() => getPhantom(), [])
 
   useEffect(() => {
-    if (phantom?.publicKey) {
-      setConnectedAddress(phantom.publicKey.toBase58())
-    }
+    if (phantom?.publicKey) setConnectedAddress(phantom.publicKey.toBase58())
   }, [phantom])
+
+  const pushLog = (s: string) => setLogLines(prev => [...prev, s].slice(-6))
 
   const connectAndSign = async () => {
     setError('')
+    setLogLines([])
+
     const p = getPhantom()
     if (!p?.isPhantom) {
-      setError('Phantom wallet not found. Please install Phantom and try again.')
+      setError('Phantom wallet not found. Install Phantom and try again.')
       return
     }
 
     try {
       setBusy(true)
 
-      // 1) Connect (avoid navigation during this time)
-      const { publicKey } = await p.connect()
-      const address = publicKey.toBase58()
+      // IMPORTANT: keep everything inside the same click handler flow
+      // (some browsers/extensions require an active user gesture)
+      pushLog('Connecting wallet…')
+      const firstConnect =
+        (await p.connect({ onlyIfTrusted: true }).catch(() => null)) ||
+        (await p.connect())
+      const address = firstConnect.publicKey.toBase58()
       setConnectedAddress(address)
+      pushLog(`Connected: ${address.slice(0, 6)}…${address.slice(-6)}`)
 
-      // 2) Get nonce/message from backend
+      pushLog('Requesting nonce from API…')
       const payload = await fetchNoncePayload(address)
-      // For your debugging visibility:
-      // console.debug('nonce payload', payload)
+      pushLog(`Nonce received: ${payload.nonce.slice(0, 8)}…`)
 
-      // 3) Sign EXACT message from API
-      const toSign = new TextEncoder().encode(payload.message)
-      const signature = await signWithRetry(p, toSign)
+      pushLog('Preparing message…')
+      const message = payload.message || fallbackMessage(address, payload.nonce)
 
-      // 4) Verify
+      // Sign with resiliency (handles the “message port closed” case)
+      const signature = await signWithResiliency(p, address, message, pushLog)
+
+      pushLog('Verifying signature with API…')
       await verifySignature({
         address,
         nonce: payload.nonce,
-        message: payload.message,
+        message,
         signatureBytes: signature
       })
+      pushLog('Signed in ✅')
 
       onSignedIn?.(address)
     } catch (e: any) {
       setError(e?.message || 'Wallet sign-in failed')
+      pushLog(`Error: ${String(e?.message || e)}`)
     } finally {
       setBusy(false)
     }
   }
 
-  /** ————————  UI STYLES  ———————— */
+  // ———— Styles ————
   const gradientBg: React.CSSProperties = {
     minHeight: '100vh',
     width: '100%',
@@ -232,7 +260,6 @@ export default function SignInWithWallet({ onSignedIn }: Props) {
     placeItems: 'center',
     padding: 16
   }
-
   const card: React.CSSProperties = {
     width: 'min(92vw, 560px)',
     background: 'rgba(20, 22, 30, 0.7)',
@@ -245,14 +272,12 @@ export default function SignInWithWallet({ onSignedIn }: Props) {
     boxShadow:
       '0 10px 30px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.05), inset 0 -1px 0 rgba(0,0,0,0.25)'
   }
-
   const headerRow: React.CSSProperties = {
     display: 'flex',
     alignItems: 'center',
     gap: 12,
     marginBottom: 6
   }
-
   const badge: React.CSSProperties = {
     fontSize: 12,
     color: '#b9c4ff',
@@ -265,20 +290,17 @@ export default function SignInWithWallet({ onSignedIn }: Props) {
     alignItems: 'center',
     gap: 8
   }
-
   const title: React.CSSProperties = {
     fontSize: 22,
     fontWeight: 700,
     letterSpacing: 0.3,
     margin: 0
   }
-
   const subtitle: React.CSSProperties = {
     margin: '4px 0 16px 0',
     opacity: 0.9,
     lineHeight: 1.5
   }
-
   const connectBtn: React.CSSProperties = {
     display: 'inline-flex',
     alignItems: 'center',
@@ -296,7 +318,6 @@ export default function SignInWithWallet({ onSignedIn }: Props) {
     boxShadow:
       '0 10px 24px rgba(108,92,231,0.25), inset 0 1px 0 rgba(255,255,255,0.06)'
   }
-
   const smallRow: React.CSSProperties = {
     display: 'flex',
     alignItems: 'center',
@@ -304,7 +325,6 @@ export default function SignInWithWallet({ onSignedIn }: Props) {
     justifyContent: 'space-between',
     marginTop: 12
   }
-
   const addressChip: React.CSSProperties = {
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
     fontSize: 12,
@@ -313,7 +333,6 @@ export default function SignInWithWallet({ onSignedIn }: Props) {
     padding: '6px 10px',
     borderRadius: 8
   }
-
   const errBox: React.CSSProperties = {
     marginTop: 12,
     background: 'rgba(255, 99, 132, 0.08)',
@@ -322,6 +341,17 @@ export default function SignInWithWallet({ onSignedIn }: Props) {
     padding: '10px 12px',
     borderRadius: 10,
     whiteSpace: 'pre-wrap'
+  }
+  const logBox: React.CSSProperties = {
+    marginTop: 10,
+    background: 'rgba(255,255,255,0.04)',
+    border: '1px solid rgba(255,255,255,0.08)',
+    color: '#cfd7ff',
+    padding: '10px 12px',
+    borderRadius: 10,
+    fontSize: 12,
+    lineHeight: 1.4,
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'
   }
 
   return (
@@ -341,7 +371,7 @@ export default function SignInWithWallet({ onSignedIn }: Props) {
 
         <h1 style={title}>Welcome to FST</h1>
         <p style={subtitle}>
-          Connect your wallet and sign a one-time message (nonce) from the server to prove ownership.
+          Connect your wallet and sign a one-time message from the server to prove ownership.
           No gas, no approvals — just a secure signature.
         </p>
 
@@ -389,6 +419,11 @@ export default function SignInWithWallet({ onSignedIn }: Props) {
         </div>
 
         {!!error && <div style={errBox}>{error}</div>}
+        {!!logLines.length && (
+          <div style={logBox}>
+            {logLines.map((l, i) => <div key={i}>• {l}</div>)}
+          </div>
+        )}
       </div>
 
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
