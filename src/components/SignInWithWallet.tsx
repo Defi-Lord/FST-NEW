@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { PublicKey } from '@solana/web3.js'
 import { Buffer } from 'buffer'
 
-/** Make Buffer available (some libs expect it on window) */
 ;(window as any).Buffer ??= Buffer
 
 type PhantomProvider = {
@@ -10,59 +9,83 @@ type PhantomProvider = {
   publicKey?: PublicKey
   connect: (opts?: any) => Promise<{ publicKey: PublicKey }>
   disconnect: () => Promise<void>
-  signMessage?: (message: Uint8Array, display?: any) => Promise<{ signature: Uint8Array }>
+  signMessage?: (
+    message: Uint8Array,
+    opts?: { display?: 'utf8' | 'hex' }
+  ) => Promise<{ signature: Uint8Array }>
 }
 
 type Props = {
   onSignedIn?: (address: string) => void
 }
 
-/** Change this if you deploy your API somewhere else */
+/** Change if you host the API somewhere else */
 const API_BASE =
   (import.meta as any).env?.VITE_API_BASE ||
   'https://fst-api.onrender.com'
 
+/** Utilities */
 function getPhantom(): PhantomProvider | undefined {
   return (window as any)?.solana
 }
-
-/** convert Uint8Array -> base64 string */
 function bytesToBase64(bytes: Uint8Array): string {
-  let binary = ''
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
-  return btoa(binary)
+  let s = ''
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i])
+  return btoa(s)
+}
+function nowIso() {
+  try { return new Date().toISOString() } catch { return '' }
 }
 
-/** Tries GET ?wallet=, then GET ?address=, then POST body to obtain a nonce */
-async function fetchNonce(address: string): Promise<string> {
-  // 1) try wallet param (your backend’s preferred shape)
-  let r = await fetch(`${API_BASE}/auth/nonce?wallet=${encodeURIComponent(address)}`, {
-    credentials: 'include'
-  })
-  if (r.ok) {
-    const j = await r.json()
-    if (j?.nonce) return String(j.nonce)
-  } else {
-    // if 400 and message says missing wallet/anything, we’ll try next shapes
-    try {
-      const t = await r.text()
-      if (!/not found/i.test(t)) {
-        // fallthrough to other shapes regardless
+/** Build a safe fallback message if API returns only a nonce */
+function fallbackMessage(addr: string, nonce: string) {
+  return `FST login
+
+Wallet: ${addr}
+Nonce: ${nonce}
+Issued At: ${nowIso()}
+
+By signing, you prove ownership of this wallet.`
+}
+
+/** Fetch nonce (and possibly a precomposed message) */
+async function fetchNoncePayload(address: string): Promise<{
+  nonce: string
+  message: string
+  expiresInSec?: number
+}> {
+  // Prefer wallet param (your API expects this)
+  const urls = [
+    `${API_BASE}/auth/nonce?wallet=${encodeURIComponent(address)}`,
+    `${API_BASE}/auth/nonce?address=${encodeURIComponent(address)}`
+  ]
+
+  let lastErrTxt = ''
+  for (const u of urls) {
+    const r = await fetch(u, { credentials: 'include' })
+    if (r.ok) {
+      const j = await r.json()
+      if (j?.nonce) {
+        return {
+          nonce: String(j.nonce),
+          message: j.message ? String(j.message) : fallbackMessage(address, String(j.nonce)),
+          expiresInSec: typeof j.expiresInSec === 'number' ? j.expiresInSec : undefined
+        }
       }
-    } catch {}
+      // if body is just a string nonce
+      if (typeof j === 'string') {
+        return {
+          nonce: j,
+          message: fallbackMessage(address, j)
+        }
+      }
+    } else {
+      lastErrTxt = (await r.text().catch(() => '')) || `HTTP ${r.status}`
+    }
   }
 
-  // 2) try address param
-  r = await fetch(`${API_BASE}/auth/nonce?address=${encodeURIComponent(address)}`, {
-    credentials: 'include'
-  })
-  if (r.ok) {
-    const j = await r.json()
-    if (j?.nonce) return String(j.nonce)
-  }
-
-  // 3) POST body (covers APIs that require JSON body)
-  r = await fetch(`${API_BASE}/auth/nonce`, {
+  // Try POST body as a final fallback
+  const r = await fetch(`${API_BASE}/auth/nonce`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
@@ -70,20 +93,27 @@ async function fetchNonce(address: string): Promise<string> {
   })
   if (r.ok) {
     const j = await r.json()
-    if (j?.nonce) return String(j.nonce)
+    if (j?.nonce) {
+      return {
+        nonce: String(j.nonce),
+        message: j.message ? String(j.message) : fallbackMessage(address, String(j.nonce)),
+        expiresInSec: typeof j.expiresInSec === 'number' ? j.expiresInSec : undefined
+      }
+    }
   }
 
-  const txt = await r.text().catch(() => '')
-  throw new Error(txt || `Unable to obtain nonce (HTTP ${r.status})`)
+  const txt = lastErrTxt || (await r.text().catch(() => '')) || 'Unable to obtain nonce'
+  throw new Error(txt)
 }
 
-/** Verifies the signed nonce. We send both wallet & address, plus base64 + raw sig */
+/** Verify signature with backend */
 async function verifySignature(params: {
   address: string
   nonce: string
+  message: string
   signatureBytes: Uint8Array
 }) {
-  const { address, nonce, signatureBytes } = params
+  const { address, nonce, message, signatureBytes } = params
   const signatureBase64 = bytesToBase64(signatureBytes)
 
   const r = await fetch(`${API_BASE}/auth/verify`, {
@@ -94,8 +124,9 @@ async function verifySignature(params: {
       wallet: address,
       address,
       nonce,
+      message,
       signatureBase64,
-      signature: Array.from(signatureBytes) // raw bytes too, in case backend expects that
+      signature: Array.from(signatureBytes)
     })
   })
 
@@ -112,7 +143,31 @@ async function verifySignature(params: {
   return token
 }
 
-/** A tasteful, attractive connect & sign-in UI */
+/** Phantom sometimes throws a transient “message port closed” error; retry once */
+async function signWithRetry(
+  provider: PhantomProvider,
+  msgBytes: Uint8Array
+): Promise<Uint8Array> {
+  const attempt = async () => {
+    if (!provider.signMessage) throw new Error('Wallet does not support signMessage')
+    const { signature } = await provider.signMessage(msgBytes, { display: 'utf8' })
+    return signature
+  }
+
+  try {
+    return await attempt()
+  } catch (e: any) {
+    const txt = String(e?.message || e)
+    if (/message port closed/i.test(txt) || /lastError/i.test(txt)) {
+      // tiny backoff & second try
+      await new Promise(res => setTimeout(res, 350))
+      return await attempt()
+    }
+    throw e
+  }
+}
+
+/** Pretty Connect & Sign Component */
 export default function SignInWithWallet({ onSignedIn }: Props) {
   const [connectedAddress, setConnectedAddress] = useState<string>('')
   const [busy, setBusy] = useState(false)
@@ -137,21 +192,27 @@ export default function SignInWithWallet({ onSignedIn }: Props) {
     try {
       setBusy(true)
 
-      // 1) connect
+      // 1) Connect (avoid navigation during this time)
       const { publicKey } = await p.connect()
       const address = publicKey.toBase58()
       setConnectedAddress(address)
 
-      // 2) get the nonce
-      const nonce = await fetchNonce(address)
+      // 2) Get nonce/message from backend
+      const payload = await fetchNoncePayload(address)
+      // For your debugging visibility:
+      // console.debug('nonce payload', payload)
 
-      // 3) sign it
-      if (!p.signMessage) throw new Error('Wallet does not support signMessage')
-      const toSign = new TextEncoder().encode(String(nonce))
-      const { signature } = await p.signMessage(toSign, { display: 'utf8' })
+      // 3) Sign EXACT message from API
+      const toSign = new TextEncoder().encode(payload.message)
+      const signature = await signWithRetry(p, toSign)
 
-      // 4) verify with backend
-      await verifySignature({ address, nonce, signatureBytes: signature })
+      // 4) Verify
+      await verifySignature({
+        address,
+        nonce: payload.nonce,
+        message: payload.message,
+        signatureBytes: signature
+      })
 
       onSignedIn?.(address)
     } catch (e: any) {
@@ -161,7 +222,7 @@ export default function SignInWithWallet({ onSignedIn }: Props) {
     }
   }
 
-  /** ————————  STYLES  ———————— */
+  /** ————————  UI STYLES  ———————— */
   const gradientBg: React.CSSProperties = {
     minHeight: '100vh',
     width: '100%',
@@ -267,7 +328,6 @@ export default function SignInWithWallet({ onSignedIn }: Props) {
     <div style={gradientBg}>
       <div style={card}>
         <div style={headerRow}>
-          {/* Phantom logo-ish */}
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden>
             <circle cx="12" cy="12" r="10" fill="#8b5cf6" />
             <path d="M8 13c2 3 6 3 8 0" stroke="white" strokeWidth="1.7" strokeLinecap="round"/>
@@ -281,8 +341,8 @@ export default function SignInWithWallet({ onSignedIn }: Props) {
 
         <h1 style={title}>Welcome to FST</h1>
         <p style={subtitle}>
-          Connect your wallet and sign a one-time nonce to prove ownership.
-          No gas, no approvals — just a secure message signature.
+          Connect your wallet and sign a one-time message (nonce) from the server to prove ownership.
+          No gas, no approvals — just a secure signature.
         </p>
 
         <button
@@ -331,10 +391,7 @@ export default function SignInWithWallet({ onSignedIn }: Props) {
         {!!error && <div style={errBox}>{error}</div>}
       </div>
 
-      {/* tiny keyframes for the spinner */}
-      <style>{`
-        @keyframes spin { to { transform: rotate(360deg); } }
-      `}</style>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   )
 }
