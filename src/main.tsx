@@ -14,7 +14,6 @@ import { WalletModalProvider } from '@solana/wallet-adapter-react-ui'
 import { PhantomWalletAdapter } from '@solana/wallet-adapter-wallets'
 import '@solana/wallet-adapter-react-ui/styles.css'
 
-// Prefer env, fallback to Devnet. You can set VITE_SOLANA_RPC in Vercel.
 const SOLANA_RPC =
   (import.meta as any).env?.VITE_SOLANA_RPC ||
   'https://api.devnet.solana.com'
@@ -24,9 +23,8 @@ const wallets = [new PhantomWalletAdapter()]
 
 const root = createRoot(document.getElementById('root')!)
 root.render(
-  // Keep StrictMode off to avoid double effects/pops in wallet flows
   <ConnectionProvider endpoint={endpoint}>
-    <WalletProvider wallets={wallets}>
+    <WalletProvider wallets={wallets} autoConnect>
       <WalletModalProvider>
         <AppProvider>
           <App />
