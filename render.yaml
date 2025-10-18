@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: fst-api
+    env: node
+    plan: free
+    region: frankfurt
+    rootDir: apps/api
+    buildCommand: npm install --no-audit --no-fund && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: CORS_ORIGIN
+        value: ""

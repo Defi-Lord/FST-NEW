@@ -1,4 +1,5 @@
 {
+<<<<<<< HEAD
   "name": "fst-mini-app-backend",
   "version": "1.0.0",
   "type": "module",
@@ -41,5 +42,33 @@
     "prisma": "^5.22.0",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3"
+=======
+  "name": "fst-main",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20 <21"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@solana/web3.js": "1.98.4",
+    "@solana/spl-token": "^0.4.14",
+    "buffer": "^6.0.3",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.26",
+    "@types/react-dom": "18.3.7",
+    "@vitejs/plugin-react": "^4.3.3",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.20",
+    "vite-plugin-node-polyfills": "^0.22.0"
+>>>>>>> 388fcd3d710d319afc1664f924593a1d50d8a439
   }
 }
