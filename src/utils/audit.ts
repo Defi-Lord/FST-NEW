@@ -1,4 +1,4 @@
-import { prisma } from "./prisma.ts";
+import { prisma } from "./prisma.js";   // 👈 notice no `.ts` and using curly braces
 
 export async function ensureWallet(address?: string) {
   if (!address) return null;

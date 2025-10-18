@@ -1,23 +1,30 @@
 // apps/api/src/middleware/auth.ts
-import type { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import { Request, Response, NextFunction } from 'express';
 
-export type JWTPayload = { uid: string; address: string; role?: string };
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 
-export function issueJWT(payload: JWTPayload) {
-  const secret = process.env.JWT_SECRET;
-  if (!secret) throw new Error('Missing JWT_SECRET');
-  return jwt.sign(payload, secret, { expiresIn: '7d' });
-}
+export const requireUser = (req: Request, res: Response, next: NextFunction) => {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.substring(7) : '';
 
-export function auth(req: Request, res: Response, next: NextFunction) {
-  const h = req.headers.authorization || '';
-  const token = h.startsWith('Bearer ') ? h.slice(7) : undefined;
-  if (!token) return res.status(401).json({ error: 'No token' });
+  if (!token) return res.status(401).json({ error: 'unauthorized' });
+
   try {
-    (req as any).user = jwt.verify(token, process.env.JWT_SECRET!);
+    const decoded = jwt.verify(token, JWT_SECRET);
+    (req as any).user = decoded;
     next();
-  } catch {
-    res.status(401).json({ error: 'Invalid token' });
+  } catch (err) {
+    return res.status(401).json({ error: 'invalid_token' });
   }
-}
+};
+
+export const requireAdmin = (req: Request, res: Response, next: NextFunction) => {
+  const user = (req as any).user;
+  if (!user || user.role !== 'admin') {
+    return res.status(403).json({ error: 'admin_only' });
+  }
+  next();
+};
+
+export const requireAuth = requireUser; // alias for contest routes
