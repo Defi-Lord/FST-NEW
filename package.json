@@ -1,0 +1,39 @@
+{
+  "name": "@fst/api",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/server.js",
+  "engines": {
+    "node": ">=20 <21"
+  },
+  "scripts": {
+    "dev": "ts-node src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "prisma:generate": "prisma generate --schema ./prisma/schema.prisma",
+    "prisma:status": "prisma migrate status --schema ./prisma/schema.prisma",
+    "prisma:migrate": "prisma migrate dev --schema ./prisma/schema.prisma",
+    "postinstall": "npm run prisma:generate"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0",
+    "@solana/web3.js": "^1.98.4",
+    "bs58": "^5.0.0",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "tweetnacl": "^1.0.3"
+  },
+  "devDependencies": {
+    "@types/cookie-parser": "^1.4.9",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.23",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^20.14.10",
+    "prisma": "^5.22.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.3"
+  }
+}

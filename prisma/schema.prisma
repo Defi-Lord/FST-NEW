@@ -1,0 +1,99 @@
+// prisma/schema.prisma
+
+// ---------- Generators ----------
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ---------- Datasource ----------
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Enums ----------
+enum ContestRealm {
+  FREE
+  WEEKLY
+  MONTHLY
+  SEASONAL
+}
+
+// ---------- Core Models ----------
+
+/// Users are keyed by their wallet address string.
+/// If you already have more fields on User, add them here again.
+model User {
+  id          String      @id                        // wallet address (base58)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  displayName String?
+
+  // Relations
+  entries     ContestEntry[]
+
+  @@map("users")
+}
+
+/// Contest an admin creates (e.g., FREE, WEEKLY, etc.)
+model Contest {
+  id         String        @id @default(cuid())
+  title      String
+  realm      ContestRealm
+  entryFee   Int           @default(0)
+  active     Boolean       @default(false)
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  // Relations
+  entries    ContestEntry[]
+
+  @@index([active])
+  @@index([realm])
+  @@map("contests")
+}
+
+/// A user's participation in a contest (one per user per contest).
+/// `points` is the running total for leaderboard.
+/// `team` can store the selected XI/squad JSON (optional).
+model ContestEntry {
+  id         String       @id @default(cuid())
+  userId     String
+  contestId  String
+  points     Int          @default(0)
+  team       Json?
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  // Relations
+  user       User         @relation(fields: [userId], references: [id])
+  contest    Contest      @relation(fields: [contestId], references: [id])
+  scores     ContestScore[]
+
+  // Constraints / Indexes
+  @@unique([userId, contestId])   // one entry per user per contest
+  @@index([contestId])
+  @@index([userId])
+
+  @@map("contest_entries")
+}
+
+/// Per-round (gameweek) scoring history for an entry.
+/// Useful to render weekly progress and to recompute totals.
+model ContestScore {
+  id         String        @id @default(cuid())
+  entryId    String
+  round      Int
+  points     Int           @default(0)
+  details    Json?
+  createdAt  DateTime      @default(now())
+
+  // Relations
+  entry      ContestEntry  @relation(fields: [entryId], references: [id])
+
+  // Constraints / Indexes
+  @@unique([entryId, round])
+  @@index([round])
+
+  @@map("contest_scores")
+}
