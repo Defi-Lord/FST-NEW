@@ -24,6 +24,7 @@
     "express": "^4.21.2",
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
+    "tsx": "^4.20.6",
     "tweetnacl": "^1.0.3"
   },
   "devDependencies": {
